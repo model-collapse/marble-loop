@@ -526,7 +526,7 @@ runs/<run-id>/
 | Phase | Deliverable |
 |---|---|
 | M0 ✅ (2026-11-12) | Adapter schema + `bench validate/calibrate/eval`; toy benchmarks; local launcher; adapters for KernelBench / AlgoTune / autoresearch — see §12.1 |
-| M1 | Controller: tree, reward, git worktrees, clean-room eval, noise-aware comparison; greedy loop with the 5 roles |
+| M1 ✅ (2026-11-13) | Controller: tree, git worktrees, clean-room eval, noise-aware comparison + full-mode confirmation; greedy loop with the 5 roles — see §12.2 |
 | M2 | Inspector: expectations, rule detectors, LLM investigation; Supervisor; fault-injection suite green |
 | M3 | Budget-aware MCTS + lesson pools + citations; resource planner + `resources.yaml`; template launcher |
 | M4 | Plugin (skill, MCP, hooks), report, docs; record/replay CI |
@@ -545,6 +545,28 @@ Carry-overs into M1:
 - KernelBench: many level-1 shapes need > 24 GB; add a memory-fit pre-check to the generator.
 - Upstream PRs: AlgoTune `sys.modules` snapshot, KernelBench integer-input dtype (patches in
   `marble-benchmarks/patches/`), and report KernelBench's mean/fixed-order timing bias.
+
+
+### 12.2 M1 status and carry-overs
+Done: `workspace.py`, `runstate.py`, `agents.py` (headless `claude -p` workers), `hooks.py` (edit guard),
+`roles.py`, `search.py` (greedy loop), `marble run start|resume|status`; full-mode confirmation of new
+bests; KernelBench build cache; 69 tests incl. fake-agent loop tests. Live runs on 4x A10G:
+
+| Run | Result | Cost | Wall |
+|---|---|---|---|
+| toy-pairwise | 1x -> 216x quick (257x full) in 4 iterations | $0.51 | 4 min |
+| AlgoTune pagerank (no confirm) | 1x -> 51x quick (43x full, 100 problems, 0 invalid) | $0.54 | 7 min |
+| AlgoTune pagerank (confirm) | 41.6x quick / 35.3x full; a +6.3% quick gain rejected at +2.9% full | $0.53 | 7 min |
+| KernelBench GELU | 1x -> 8.28x (fused float4 kernel; ~75% of DRAM bandwidth) | $0.41 | 12 min |
+| autoresearch | val_bpb 1.3262 -> 1.1790 (TOTAL_BATCH 2^19 -> 2^17) | $0.45 | 70 min |
+Planner (Opus) is ~60% of agent spend; Reflector (Haiku) ~2%.
+
+Carry-overs into M2/M3:
+- Smoke tests: the Implementer ran the full ~7-min autoresearch training as a "smoke test" (380 s per
+  attempt). Give agents the calibrated eval duration and a cheap smoke mode per benchmark.
+- Live debug/revert paths not yet exercised (covered only by fake-agent tests); fault-injection suite (M2).
+- AlgoTune: compare against the official evaluator for leaderboard-comparable numbers.
+- autoresearch protected re-evaluation (M0 carry-over) still open.
 
 ---
 
