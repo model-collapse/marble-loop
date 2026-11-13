@@ -144,6 +144,62 @@ def cmd_calibrate(args) -> int:
     return 0 if report["status"] == "ok" else 2
 
 
+def cmd_run_start(args) -> int:
+    from .runstate import RunConfig
+    from .search import Controller
+
+    out = Path(args.out) if args.out else None
+    if out is None:
+        spec = load_spec(args.benchmark)
+        out = _default_out(spec.name, "run")
+    cfg = RunConfig(benchmark=str(Path(args.benchmark).resolve()), budget_usd=args.budget_usd,
+                    wall_hours=args.hours, max_iterations=args.max_iters, max_no_improve=args.max_no_improve,
+                    repeats=args.repeats, debug_attempts=args.debug_attempts, eval_mode=args.mode,
+                    analyze=not args.no_analyze)
+    for kv in args.model or []:
+        role, _, model = kv.partition("=")
+        if role not in cfg.models or not model:
+            raise SpecError(f"--model expects role=model-id with role in {sorted(cfg.models)}")
+        cfg.models[role] = model
+    if (out / "tree.sqlite").exists():
+        print(f"✗ {out} already contains a run; use `marble run resume {out}`", file=sys.stderr)
+        return 1
+    ctl = Controller(out, _launcher(args), cfg)
+    best = ctl.run()
+    print(f"\nbest: node #{best.id} {ctl.spec.score.key}={best.score:.6g}; report: {out / 'report.md'}")
+    return 0
+
+
+def cmd_run_resume(args) -> int:
+    from .search import Controller
+
+    ctl = Controller(Path(args.run), _launcher(args))
+    best = ctl.run()
+    print(f"\nbest: node #{best.id} {ctl.spec.score.key}={best.score:.6g}; report: {Path(args.run) / 'report.md'}")
+    return 0
+
+
+def cmd_run_status(args) -> int:
+    from .runstate import RunState
+
+    st = RunState(Path(args.run))
+    cfg = st.load_config()
+    nodes = st.nodes()
+    best = st.best()
+    print(f"run {Path(args.run).resolve()}  benchmark {cfg.benchmark}")
+    print(f"cost ${st.total_cost():.2f} / ${cfg.budget_usd:.2f}   nodes {len(nodes)}   lessons {len(st.lessons())}")
+    if best:
+        print(f"best: node #{best.id} score {best.score:.6g}")
+    for n in nodes[-args.last:]:
+        s = f"{n.score:.6g}" if n.score is not None else "-"
+        print(f"  #{n.id:<3} parent {str(n.parent):<4} {n.kind:<8} {n.status:<10} {n.eval_status or '-':<14} "
+              f"score {s:<12} {'★' if n.is_best else ('+' if n.improved else '')}  ${n.cost_usd:.2f}")
+    stopped = [e for e in st.events() if e["type"] == "run_stopped"]
+    if stopped:
+        print(f"last stop: {stopped[-1].get('reason')}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="marble", description="MARBLE: Monitored Analyze-Refine Budgeted Loop Engine")
     p.add_argument("--version", action="version", version=f"marble {__version__}")
@@ -178,6 +234,39 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--mode", action="append", help="mode(s) to calibrate (repeatable; default: default_mode)")
     c.add_argument("--repeats", type=int, default=3)
     c.set_defaults(func=cmd_calibrate)
+
+    run = sub.add_parser("run", help="automated research runs").add_subparsers(dest="run_cmd", required=True)
+
+    def slots(sp):
+        sp.add_argument("--gpus", help="comma-separated GPU ids for slots, or 'none' (default: all detected)")
+        sp.add_argument("--cpu-slots", type=int, default=1)
+        sp.add_argument("--cpus-per-slot", type=int)
+        sp.add_argument("--pin", action="store_true")
+
+    rs = run.add_parser("start", help="start a greedy analyze-refine run (M1)")
+    rs.add_argument("benchmark")
+    rs.add_argument("--out", help="run directory (default: runs/<name>-run-<time>)")
+    rs.add_argument("--budget-usd", type=float, default=20.0)
+    rs.add_argument("--hours", type=float, default=2.0)
+    rs.add_argument("--max-iters", type=int, default=20)
+    rs.add_argument("--max-no-improve", type=int, default=6)
+    rs.add_argument("--repeats", type=int, help="eval repeats per candidate (default: noise.repeats)")
+    rs.add_argument("--debug-attempts", type=int, default=3)
+    rs.add_argument("--mode", help="eval mode for candidates (default: the spec's default_mode)")
+    rs.add_argument("--no-analyze", action="store_true", help="skip the benchmark's analyze tools")
+    rs.add_argument("--model", action="append", help="role=model-id override (repeatable)")
+    slots(rs)
+    rs.set_defaults(func=cmd_run_start)
+
+    rr = run.add_parser("resume", help="continue a stopped run (same config)")
+    rr.add_argument("run")
+    slots(rr)
+    rr.set_defaults(func=cmd_run_resume)
+
+    rt = run.add_parser("status", help="show a run's nodes and spend")
+    rt.add_argument("run")
+    rt.add_argument("--last", type=int, default=30)
+    rt.set_defaults(func=cmd_run_status)
     return p
 
 

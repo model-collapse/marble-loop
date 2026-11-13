@@ -223,3 +223,39 @@ def run_repeats(
         if stop_on_failure and r.status in ("failed", "timeout", "integrity_error", "invalid_output"):
             break
     return EvalSummary(mode=mode_name, results=results)
+
+
+def run_tool(
+    spec: BenchmarkSpec,
+    tool,  # spec.AnalyzeTool
+    *,
+    launcher: LocalLauncher,
+    out_dir: Path,
+    candidate: Path | None = None,
+    manifest: dict[str, str] | None = None,
+    timeout: float | None = None,
+    max_chars: int = 12_000,
+) -> dict[str, Any]:
+    """Run an analyze tool in a clean room of `candidate`; returns status + truncated output."""
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "out").mkdir(exist_ok=True)
+    workdir = out_dir / "workdir"
+    if workdir.exists():
+        shutil.rmtree(workdir)
+    try:
+        room = prepare_cleanroom(spec, candidate=candidate, dest=workdir, manifest=manifest)
+    except IntegrityError as e:
+        return {"tool": tool.name, "status": "integrity_error", "output": str(e)}
+    try:
+        values = {"out": out_dir / "out", "workdir": room.path, "bench_dir": spec.bench_dir}
+        env = {k: render(v, **values) for k, v in spec.env.items()}
+        job = launcher.run(render(tool.cmd, **values), cwd=room.path, resources=tool.resources,
+                           timeout=min(tool.timeout, timeout or tool.timeout), log_path=out_dir / "tool.log", env=env)
+        text = (out_dir / "tool.log").read_text(errors="replace")
+        if len(text) > max_chars:  # keep head and tail: summaries are usually at the end
+            text = text[: max_chars // 3] + "\n... [truncated] ...\n" + text[-2 * max_chars // 3:]
+        status = "ok" if job.ok else ("timeout" if job.timed_out else f"exit {job.returncode}")
+        return {"tool": tool.name, "status": status, "duration_s": round(job.duration_s, 1), "output": text}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)

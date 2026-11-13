@@ -64,3 +64,9 @@ def test_tampered_pristine_detected_against_trusted_manifest(spec):
     (spec.repo / "eval" / "eval.py").write_text("# tampered after the run started\n")
     with pytest.raises(IntegrityError, match="trusted manifest"):
         prepare_cleanroom(spec, manifest=trusted)
+
+
+def test_git_worktree_marker_file_is_ignored(spec, tmp_path):
+    cand = _candidate(spec, tmp_path)
+    (cand / ".git").write_text("gitdir: /somewhere/.git/worktrees/x\n")   # git worktrees use a .git *file*
+    assert check_candidate(spec, cand).changed == []

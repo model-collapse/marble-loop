@@ -59,12 +59,14 @@ evaluate:
     cmd: >-
       ${{KERNELBENCH_ROOT}}/.venv/bin/python eval/kb_eval.py --mode quick --backend {backend}
       --ref eval/reference.py --kernel model_new.py --out {{out}}
+      --build-cache ${{HOME}}/.cache/marble/kernelbench-build
     timeout: 900
     resources: {{gpu: 1}}
   full:
     cmd: >-
       ${{KERNELBENCH_ROOT}}/.venv/bin/python eval/kb_eval.py --mode full --backend {backend}
       --ref eval/reference.py --kernel model_new.py --out {{out}}
+      --build-cache ${{HOME}}/.cache/marble/kernelbench-build
     timeout: 1800
     resources: {{gpu: 1}}
   reference:
@@ -73,6 +75,7 @@ evaluate:
     cmd: >-
       ${{KERNELBENCH_ROOT}}/.venv/bin/python eval/kb_eval.py --mode quick --backend {backend} --no-static-check
       --ref eval/reference.py --kernel model_new.py --out {{out}}
+      --build-cache ${{HOME}}/.cache/marble/kernelbench-build
     timeout: 900
     resources: {{gpu: 1}}
     calibration_only: true

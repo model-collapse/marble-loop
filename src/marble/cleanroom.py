@@ -61,6 +61,8 @@ def match_any(relpath: str, patterns: list[str]) -> bool:
 
 
 def _ignored(name: str, is_dir: bool) -> bool:
+    if name == ".git":  # directory in a clone, plain file in a git worktree
+        return True
     if is_dir:
         return name in IGNORED_DIRS
     return any(name.endswith(s) for s in IGNORED_SUFFIXES)

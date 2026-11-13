@@ -97,6 +97,7 @@ def main():
     ap.add_argument("--backend", default="cuda")
     ap.add_argument("--precision", default="fp32")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--build-cache", help="shared build-cache root; builds are keyed by source hash + GPU arch")
     ap.add_argument("--no-static-check", action="store_true",
                     help="calibration of the pure-PyTorch baseline only (MARBLE 'reference' mode)")
     a = ap.parse_args()
@@ -127,11 +128,19 @@ def main():
     kb_utils.set_gpu_arch([arch])
     device = torch.device("cuda:0")
     res.update(gpu=torch.cuda.get_device_name(0), gpu_arch=arch)
+    if a.build_cache:
+        import hashlib
+        key = hashlib.sha256(f"{arch}|{a.backend}|{a.precision}|{torch.__version__}\n{kernel_src}".encode()).hexdigest()[:20]
+        build_dir = os.path.join(a.build_cache, key)
+        res["build_cache_hit"] = os.path.isdir(build_dir)
+    else:
+        build_dir = os.path.join(a.out, "build")
+    os.makedirs(build_dir, exist_ok=True)
     try:
         r = kb_eval.eval_kernel_against_ref(
             original_model_src=ref_src, custom_model_src=kernel_src, measure_performance=True,
             timing_method="cuda_event", num_correct_trials=cfg["correct_trials"],
-            num_perf_trials=cfg["perf_trials"], build_dir=os.path.join(a.out, "build"), device=device,
+            num_perf_trials=cfg["perf_trials"], build_dir=build_dir, device=device,
             backend=a.backend, precision=kb_eval.get_torch_dtype_from_string(a.precision),
         )
     except Exception as e:  # compile/runtime errors in candidate code
@@ -154,7 +163,7 @@ def main():
         try:
             mt = marble_timing(kb_eval, timing, ref_src, kernel_src, a.backend,
                                kb_eval.get_torch_dtype_from_string(a.precision), device,
-                               os.path.join(a.out, "build"), cfg["rounds"], cfg["per_round"])
+                               build_dir, cfg["rounds"], cfg["per_round"])
         except Exception as e:
             res["correct"] = False
             res["error"] = f"MARBLE timing failed: {type(e).__name__}: {e}"
