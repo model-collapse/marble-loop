@@ -149,3 +149,71 @@ def test_budget_stops_run(tmp_path, launcher, toy_fit_copy, monkeypatch):
     ctl.run()
     stops = [e for e in ctl.state.events() if e["type"] == "run_stopped"]
     assert stops and "budget" in stops[-1]["reason"]
+
+
+# ------------------------------------------------------------------ confirmation in full mode
+
+VEC_SOLUTION = '''import numpy as np
+
+
+def pairwise_distances(X):
+    A = np.asarray(X, dtype=np.float64)
+    sq = np.einsum("ij,ij->i", A, A)
+    return np.sqrt(np.maximum(sq[:, None] + sq[None, :] - 2.0 * A @ A.T, 0.0))
+'''
+# Fast and correct only at the quick-mode size (n=120); wrong at the full-mode size (n=240).
+OVERFIT_SOLUTION = VEC_SOLUTION.replace(
+    "    return np.sqrt(", "    if len(X) != 120:\n        return np.zeros((len(X), len(X)))\n    return np.sqrt(")
+
+
+class FakePairwise(FakeAgent):
+    def __call__(self, call, log_dir):
+        if call.role == "implementer":
+            self.calls.append(call.role)
+            (Path(call.cwd) / "solution.py").write_text(self.implement_sequence.pop(0)[0])
+            out = {"summary": "vectorized", "files_changed": ["solution.py"], "self_check": "none"}
+            return AgentResult(role=call.role, ok=True, output=out, cost_usd=0.01)
+        return super().__call__(call, log_dir)
+
+
+@pytest.fixture
+def pairwise_copy(tmp_path):
+    dst = tmp_path / "pw"
+    shutil.copytree(ROOT / "benchmarks/toy/pairwise", dst)
+    return dst
+
+
+def test_new_best_confirmed_in_full_mode(tmp_path, launcher, pairwise_copy, monkeypatch):
+    monkeypatch.setattr(search, "run_agent", FakePairwise([(VEC_SOLUTION, {})]))
+    ctl = _controller(tmp_path, pairwise_copy, launcher, analyze=False)
+    best = ctl.run()
+    assert best.id == 2 and best.full_status == "ok" and best.full_score > 10
+    assert "confirmed in full" in (tmp_path / "run" / "report.md").read_text()
+
+
+def test_quick_only_solution_rejected_by_full_mode(tmp_path, launcher, pairwise_copy, monkeypatch):
+    monkeypatch.setattr(search, "run_agent", FakePairwise([(OVERFIT_SOLUTION, {})]))
+    ctl = _controller(tmp_path, pairwise_copy, launcher, analyze=False)
+    best = ctl.run()
+    cand = ctl.state.get(2)
+    assert cand.eval_status == "ok" and cand.score > 10          # looked great in quick mode
+    assert cand.full_status == "incorrect" and not cand.improved  # caught by the full-mode check
+    assert best.id == 1
+    v = [e for e in ctl.state.events() if e["type"] == "verdict"][-1]
+    assert "not confirmed" in v["verdict"]
+
+
+def test_resume_continues_from_existing_tree(tmp_path, launcher, toy_fit_copy, monkeypatch):
+    better = POLY_MODEL.replace("6)", "8)")
+    monkeypatch.setattr(search, "run_agent", FakeAgent([(POLY_MODEL, {}), (better, {})]))
+    ctl = _controller(tmp_path, toy_fit_copy, launcher)
+    ctl.run()
+    assert len(ctl.state.nodes()) == 2
+    cfg = ctl.state.load_config()
+    cfg.max_iterations = 2
+    ctl2 = Controller(tmp_path / "run", launcher, cfg, log=lambda s: None)
+    ctl2.run()
+    nodes = ctl2.state.nodes()
+    assert [n.kind for n in nodes] == ["root", "improve", "improve"]   # no second root, no re-init
+    assert nodes[2].parent == 2                                          # expanded the previous best
+    assert sum(1 for e in ctl2.state.events() if e["type"] == "run_stopped") == 2

@@ -33,6 +33,12 @@ from .workspace import Workspace
 FAILED_STATUSES = {"failed", "incorrect", "invalid_output", "timeout"}
 
 
+def _full(n: Node) -> str:
+    if not n.full_status:
+        return ""
+    return f"{n.full_score:.6g}" if n.full_status == "ok" and n.full_score is not None else n.full_status
+
+
 class BudgetExhausted(Exception):
     pass
 
@@ -108,24 +114,37 @@ class Controller:
                  + (f"  {res.error}" if res.error else ""))
         return res
 
-    def evaluate(self, node: Node, candidate: Path | None, *, mode: str | None, tag: str) -> EvalSummary:
+    def confirm_mode(self) -> str | None:
+        m = self.cfg.confirm_mode
+        if m in (None, "", "none", "off"):
+            return None
+        if m == "auto":
+            m = "full" if "full" in self.spec.evaluate else None
+        if m is None or m == (self.cfg.eval_mode or self.spec.default_mode):
+            return None
+        return m
+
+    def evaluate(self, node: Node, candidate: Path | None, *, mode: str | None, tag: str,
+                 record: bool = True, repeats: int | None = None) -> EvalSummary:
         out = self.node_dir(node.id) / "eval" / tag
         if out.exists():
             shutil.rmtree(out)
-        summary = run_repeats(self.spec, launcher=self.launcher, out_dir=out, repeats=self.cfg.repeats,
+        summary = run_repeats(self.spec, launcher=self.launcher, out_dir=out, repeats=repeats or self.cfg.repeats,
                               mode=mode, candidate=candidate, manifest=self.manifest())
         st = summary.stats()
         (out / "summary.json").write_text(json.dumps(st, indent=2))
-        node.eval_status = st["status"]
-        node.score, node.score_std, node.score_rel_std, node.n_ok = (
-            st["score_mean"], st["score_std"], st["score_rel_std"], st["n_ok"])
-        node.eval_seconds = (node.eval_seconds or 0.0) + sum(r.duration_s for r in summary.results)
         first_bad = next((r for r in summary.results if not r.ok), None)
-        node.error = first_bad.error if first_bad else None
+        node.eval_seconds = (node.eval_seconds or 0.0) + sum(r.duration_s for r in summary.results)
+        if record:
+            node.eval_status = st["status"]
+            node.score, node.score_std, node.score_rel_std, node.n_ok = (
+                st["score_mean"], st["score_std"], st["score_rel_std"], st["n_ok"])
+            node.error = first_bad.error if first_bad else None
         self.state.event("eval", node=node.id, tag=tag, **{k: st[k] for k in ("status", "score_mean", "score_std", "n_ok", "duration_mean_s")})
         s = f"{st['score_mean']:.6g}" if st["score_mean"] is not None else "-"
+        err = first_bad.error if first_bad else None
         self.log(f"    · eval[{tag}] {st['status']}  {self.spec.score.key}={s}"
-                 + (f" ± {st['score_std']:.3g}" if st["n_ok"] > 1 else "") + (f"  ({node.error})" if node.error else ""))
+                 + (f" ± {st['score_std']:.3g}" if st["n_ok"] > 1 else "") + (f"  ({err})" if err else ""))
         return summary
 
     def history(self, limit: int = 25) -> str:
@@ -141,7 +160,8 @@ class Controller:
                     idea = n.plan[:160]
             s = f"{n.score:.6g}" if n.score is not None else "-"
             verdict = "BEST" if n.is_best else ("improved" if n.improved else n.status)
-            rows.append(f"#{n.id} (from #{n.parent}) {n.kind:<7} {n.eval_status or '-':<14} score={s:<12} {verdict:<9} {idea}")
+            full = f" full={_full(n)}" if n.full_status else ""
+            rows.append(f"#{n.id} (from #{n.parent}) {n.kind:<7} {n.eval_status or '-':<14} score={s:<12}{full} {verdict:<9} {idea}")
         return "\n".join(rows) or "(none yet)"
 
     def lessons_text(self) -> str:
@@ -268,12 +288,35 @@ class Controller:
         node.status = "evaluated" if node.eval_status == "ok" else "buggy"
         # 5. compare
         is_imp, gain, thr = improvement(self.spec, parent, node) if node.eval_status == "ok" else (False, 0.0, 0.0)
+        confirm_note = ""
+        cm = self.confirm_mode()
+        if is_imp and cm:
+            # Quick mode can over- or under-state a gain (problem subset, fewer trials): re-check before
+            # accepting a new best. Compare full-vs-full when the parent has a full score, else vs its score.
+            st = self.evaluate(node, wt, mode=cm, tag="confirm", record=False, repeats=self.cfg.confirm_repeats).stats()
+            node.full_status, node.full_score = st["status"], st["score_mean"]
+            if st["status"] != "ok":
+                is_imp = False
+                confirm_note = f"; rejected: {cm} eval {st['status']}"
+            else:
+                ref = Node(id=parent.id, parent=None, sha=None, kind="ref",
+                           score=parent.full_score if parent.full_score is not None else parent.score,
+                           score_rel_std=parent.score_rel_std)
+                cand = Node(id=node.id, parent=None, sha=None, kind="cand", score=node.full_score,
+                            score_rel_std=node.score_rel_std)
+                ok_full, gain_full, thr_full = improvement(self.spec, ref, cand)
+                confirm_note = f"; {cm}: {node.full_score:.6g} ({gain_full:+.2%})"
+                if not ok_full:
+                    is_imp = False
+                    confirm_note += f" below threshold {thr_full:.2%} → rejected"
         node.improved = int(is_imp)
         node.finished = time.time()
         self.state.update(node)
         if is_imp:
             self.state.set_best(node)
-            verdict = f"improved: {gain:+.2%} (threshold {thr:.2%})"
+            verdict = f"improved: {gain:+.2%} (threshold {thr:.2%}){confirm_note}"
+        elif confirm_note:
+            verdict = f"quick-mode gain {gain:+.2%} not confirmed{confirm_note}"
         elif node.eval_status == "ok":
             verdict = f"no significant gain: {gain:+.2%} (threshold {thr:.2%})"
         else:
@@ -368,9 +411,10 @@ class Controller:
                  f"- stop reason: {stop}", f"- cost: ${self.state.total_cost():.2f} of ${self.cfg.budget_usd:.2f}",
                  f"- nodes: {len(nodes)} ({sum(1 for n in nodes if n.improved)} improvements)",
                  f"- baseline: {self.spec.score.key} = {root.score:.6g}",
-                 f"- best: node #{best.id}, {self.spec.score.key} = {best.score:.6g}", "",
-                 "| node | parent | kind | status | eval | score | improved | cost $ | idea |",
-                 "|---|---|---|---|---|---|---|---|---|"]
+                 f"- best: node #{best.id}, {self.spec.score.key} = {best.score:.6g}"
+                 + (f" (confirmed in {self.confirm_mode()}: {best.full_score:.6g})" if best.full_score is not None else ""), "",
+                 "| node | parent | kind | status | eval | score | confirm | improved | cost $ | idea |",
+                 "|---|---|---|---|---|---|---|---|---|---|"]
         for n in nodes:
             idea = ""
             if n.plan:
@@ -379,7 +423,7 @@ class Controller:
                 idea = f"[{ch.get('family', '')}] {ch.get('idea', '')}"[:90].replace("|", "/")
             s = f"{n.score:.6g}" if n.score is not None else "-"
             lines.append(f"| {n.id}{' ★' if n.is_best else ''} | {n.parent if n.parent is not None else '-'} | {n.kind} | "
-                         f"{n.status} | {n.eval_status or '-'} | {s} | {'yes' if n.improved else ''} | {n.cost_usd:.2f} | {idea} |")
+                         f"{n.status} | {n.eval_status or '-'} | {s} | {_full(n)} | {'yes' if n.improved else ''} | {n.cost_usd:.2f} | {idea} |")
         if best.id != root.id:
             (self.dir / "best.patch").write_text(self.ws.diff(root.sha, best.sha, max_chars=10**7))
             lines += ["", f"Best change vs baseline: `best.patch`"]

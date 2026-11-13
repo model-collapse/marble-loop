@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   score_std REAL,
   score_rel_std REAL,
   n_ok INTEGER,
+  full_score REAL,      -- confirmation eval (e.g. 'full' mode) for candidate bests
+  full_status TEXT,
   plan TEXT,            -- planner summary (JSON)
   summary TEXT,         -- implementer/debugger summary
   error TEXT,
@@ -55,6 +57,8 @@ class Node:
     score_std: float | None = None
     score_rel_std: float | None = None
     n_ok: int | None = None
+    full_score: float | None = None
+    full_status: str | None = None
     plan: str | None = None
     summary: str | None = None
     error: str | None = None
@@ -79,6 +83,8 @@ class RunConfig:
     repeats: int | None = None          # None = spec.noise.repeats
     debug_attempts: int = 3
     eval_mode: str | None = None        # None = spec.default_mode
+    confirm_mode: str | None = "auto"   # re-check quick-mode bests here; "auto" = 'full' if defined; None = off
+    confirm_repeats: int = 1
     analyze: bool = True
     analyze_timeout: float | None = None
     models: dict[str, str] = field(default_factory=lambda: {

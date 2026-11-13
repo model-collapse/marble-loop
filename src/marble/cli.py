@@ -173,7 +173,15 @@ def cmd_run_start(args) -> int:
 def cmd_run_resume(args) -> int:
     from .search import Controller
 
-    ctl = Controller(Path(args.run), _launcher(args))
+    from .runstate import RunState
+
+    st = RunState(Path(args.run))
+    cfg = st.load_config()
+    for attr, val in (("budget_usd", args.budget_usd), ("max_iterations", args.max_iters), ("wall_hours", args.hours),
+                      ("max_no_improve", args.max_no_improve)):
+        if val is not None:
+            setattr(cfg, attr, val)
+    ctl = Controller(Path(args.run), _launcher(args), cfg)
     best = ctl.run()
     print(f"\nbest: node #{best.id} {ctl.spec.score.key}={best.score:.6g}; report: {Path(args.run) / 'report.md'}")
     return 0
@@ -260,6 +268,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     rr = run.add_parser("resume", help="continue a stopped run (same config)")
     rr.add_argument("run")
+    rr.add_argument("--budget-usd", type=float, help="new total budget (default: unchanged)")
+    rr.add_argument("--max-iters", type=int, help="new total iteration limit")
+    rr.add_argument("--hours", type=float, help="wall-clock limit for this session")
+    rr.add_argument("--max-no-improve", type=int)
     slots(rr)
     rr.set_defaults(func=cmd_run_resume)
 
