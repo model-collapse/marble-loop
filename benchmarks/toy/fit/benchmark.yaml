@@ -1,0 +1,24 @@
+schema_version: 1
+name: toy-fit
+description: >
+  Fit a 1-D regression model to noisy samples of an unknown function. Score is validation MSE
+  (lower is better). Deterministic: no timing noise. Exercises direction=minimize.
+repo: repo
+editable: ["model.py"]
+protected: ["eval/**"]
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+evaluate:
+  quick:
+    cmd: "${MARBLE_PYTHON} eval/eval.py --out {out}"
+    timeout: 60
+default_mode: quick
+score:
+  file: "{out}/score.json"
+  key: val_mse
+  direction: minimize
+  extra_keys: [train_mse]
+correctness: {key: valid, equals: true}
+noise:
+  repeats: 1
+  min_rel_improvement: 0.01

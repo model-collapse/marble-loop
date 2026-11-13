@@ -1,0 +1,32 @@
+[project]
+name = "marble-loop"
+version = "0.0.1"
+description = "MARBLE: Monitored Analyze-Refine Budgeted Loop Engine - automated research on white-box benchmarks"
+readme = "DESIGN.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "pyyaml>=6",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+marble = "marble.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: needs an NVIDIA GPU",
+    "external: needs an external benchmark checkout (KernelBench/AlgoTune/autoresearch)",
+    "slow: takes more than ~30 s",
+]

@@ -1,0 +1,11 @@
+# MARBLE KernelBench starter subset (level:id)
+1:1    # square matmul (4096x4096)
+1:42   # Max pooling 2D (replaces 1:19 ReLU: 6.4 GB inputs OOM on 24 GB GPUs)
+1:95   # CrossEntropyLoss (replaces 1:23 Softmax: 6.4 GB inputs OOM on 24 GB GPUs)
+1:40   # LayerNorm
+1:88   # MinGPT new GELU
+1:97   # scaled dot-product attention
+2:9    # Matmul + Subtract + Multiply + ReLU
+2:12   # Gemm + Multiply + LeakyReLU
+2:37   # Matmul + Swish + Sum + GroupNorm
+2:40   # Matmul + Scaling + ResidualAdd

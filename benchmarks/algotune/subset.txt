@@ -1,0 +1,9 @@
+# MARBLE AlgoTune starter subset (median published-model speedup in brackets)
+convolve2d_full_fill        # signal processing [~145x]
+ode_brusselator             # ODE integration   [~206x]
+water_filling               # convex optimisation [~95x]
+pagerank                    # graph             [~4.3x]
+count_connected_components  # graph             [~4.6x]
+randomized_svd              # linear algebra    [~4.5x]
+pca                         # linear algebra    [~3.5x]
+svm                         # control: hard to beat [~1.0x]

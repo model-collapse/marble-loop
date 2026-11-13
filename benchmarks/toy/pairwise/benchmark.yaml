@@ -1,0 +1,31 @@
+schema_version: 1
+name: toy-pairwise
+description: >
+  Speed up pairwise Euclidean distances. The baseline is a pure-Python double loop;
+  the score is speedup over that baseline (higher is better), gated on numerical correctness.
+repo: repo
+editable: ["solution.py"]
+protected: ["eval/**"]
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+analyze:
+  - name: profile
+    cmd: "${MARBLE_PYTHON} -m cProfile -s cumtime eval/eval.py --mode quick --out {out} | head -40"
+    timeout: 120
+evaluate:
+  quick:
+    cmd: "${MARBLE_PYTHON} eval/eval.py --mode quick --out {out}"
+    timeout: 120
+  full:
+    cmd: "${MARBLE_PYTHON} eval/eval.py --mode full --out {out}"
+    timeout: 600
+default_mode: quick
+score:
+  file: "{out}/score.json"
+  key: speedup
+  direction: maximize
+  extra_keys: [runtime_s, baseline_runtime_s]
+correctness: {key: correct, equals: true}
+noise:
+  repeats: 3
+  min_rel_improvement: 0.05
