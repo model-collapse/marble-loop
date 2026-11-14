@@ -137,7 +137,15 @@ class Controller:
             editable=self.spec.editable if editable else None, env=self._gpu_env(),
         )
         self.log(f"    · {role} ({call.model.split('.')[-1]}) …")
-        res = _agent_fn()(call, self.node_dir(node.id) / "agents")
+        log_dir = self.node_dir(node.id) / "agents"
+        res = _agent_fn()(call, log_dir)
+        if not res.log_path:  # scripted / replayed agents: keep the same on-disk record as real ones
+            log_dir.mkdir(parents=True, exist_ok=True)
+            p = log_dir / f"{role}-{time.time_ns() % 10**12:012d}.json"
+            p.write_text(json.dumps({"structured_output": res.output if isinstance(res.output, dict) else None,
+                                     "result": res.text, "total_cost_usd": res.cost_usd, "is_error": not res.ok,
+                                     "source": os.environ.get("MARBLE_FAKE_AGENT", "in-process")}, default=str))
+            res.log_path = str(p)
         self.state.add_cost(role, res.cost_usd, node=node.id, turns=res.num_turns, ok=res.ok,
                             seconds=round(res.duration_s, 1), error=res.error)
         node.cost_usd = (node.cost_usd or 0.0) + res.cost_usd

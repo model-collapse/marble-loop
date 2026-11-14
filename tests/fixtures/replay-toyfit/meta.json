@@ -1,0 +1,15 @@
+{
+  "benchmark": "fit",
+  "nodes": 5,
+  "calls": 15,
+  "best_node": 2,
+  "best_score": 0.0007541644877447764,
+  "recorded_cost_usd": 0.4604,
+  "kinds": [
+    "root",
+    "draft",
+    "improve",
+    "improve",
+    "improve"
+  ]
+}

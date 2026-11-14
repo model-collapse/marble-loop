@@ -345,6 +345,14 @@ def build_parser() -> argparse.ArgumentParser:
     hk.add_argument("name", choices=["session-start", "guard-runs", "guard"])
     hk.set_defaults(func=lambda a: __import__("marble.hooks", fromlist=["main"]).main([a.name]))
 
+    rpl = sub.add_parser("replay", help="record/replay agent behaviour for deterministic tests").add_subparsers(
+        dest="replay_cmd", required=True)
+    rex = rpl.add_parser("export", help="export a finished run's agent calls + code changes as a replay fixture")
+    rex.add_argument("run")
+    rex.add_argument("out")
+    rex.set_defaults(func=lambda a: print(json.dumps(__import__("marble.replay", fromlist=["export"]).export(
+        Path(a.run), Path(a.out)), indent=2)) or 0)
+
     run = sub.add_parser("run", help="automated research runs").add_subparsers(dest="run_cmd", required=True)
 
     def slots(sp):

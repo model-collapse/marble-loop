@@ -2,7 +2,7 @@
 name = "marble-loop"
 version = "0.0.1"
 description = "MARBLE: Monitored Analyze-Refine Budgeted Loop Engine - automated research on white-box benchmarks"
-readme = "DESIGN.md"
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "numpy>=1.24"]
 
 [project.scripts]
 marble = "marble.cli:main"
