@@ -527,7 +527,7 @@ runs/<run-id>/
 |---|---|
 | M0 ✅ (2026-11-12) | Adapter schema + `bench validate/calibrate/eval`; toy benchmarks; local launcher; adapters for KernelBench / AlgoTune / autoresearch — see §12.1 |
 | M1 ✅ (2026-11-13) | Controller: tree, git worktrees, clean-room eval, noise-aware comparison + full-mode confirmation; greedy loop with the 5 roles — see §12.2 |
-| M2 | Inspector: expectations, rule detectors, LLM investigation; Supervisor; fault-injection suite green |
+| M2 ✅ (2026-11-14) | Inspector: expectations, rule detectors, LLM investigation; Supervisor; fault-injection suite green — see §12.3 |
 | M3 | Budget-aware MCTS + lesson pools + citations; resource planner + `resources.yaml`; template launcher |
 | M4 | Plugin (skill, MCP, hooks), report, docs; record/replay CI |
 | M5 | Real-benchmark runs + ablations; public release |
@@ -567,6 +567,27 @@ Carry-overs into M2/M3:
 - Live debug/revert paths not yet exercised (covered only by fake-agent tests); fault-injection suite (M2).
 - AlgoTune: compare against the official evaluator for leaderboard-comparable numbers.
 - autoresearch protected re-evaluation (M0 carry-over) still open.
+
+
+### 12.3 M2 status and carry-overs
+Done: `inspector.py` (job watchdog, failure signatures, plan similarity, incidents), `supervisor.py`
+(`marble run supervise`, `run start --supervise`), controller recovery + heartbeat, pace stops,
+duplicate-code and repeated-idea detectors, smoke-test guidance from calibrated durations.
+Fault-injection suite (tests/test_faults.py), all detected and recovered automatically:
+eval hang · slow-but-active (extended, not killed) · busy infinite loop (LLM inspector kill) ·
+repeated failure (debugging stopped after 1 attempt instead of 3) · duplicate code (not re-evaluated) ·
+repeated idea (re-plan) · controller crash (Supervisor restart, interrupted node closed, run completes).
+
+Live checks: supervised KernelBench GEMM run, no false alarms (0 incidents; GEMM-bound, fusion gains
++0.4%/+1.5% rejected). Live GPU hang (spinning CUDA kernel), real Haiku Inspector:
+- without code context it chose "extend 300 s" (a spinning kernel looks busy) → killed at ~380 s;
+- with the candidate diff in its context it diagnosed the infinite loop and killed at ~83 s
+  (hard timeout 900 s), cost $0.0012; the Debugger's fix then scored 8.43x.
+
+Carry-overs:
+- Python stack dumps for stuck jobs need ptrace (`kernel.yama.ptrace_scope=1` blocks py-spy).
+- Agent calls are only bounded (timeout, $ cap); mid-call monitoring needs stream-json (M4).
+- Inspection lessons go to incidents.jsonl; feeding them into the lesson pool is M3 (§5.5).
 
 ---
 
