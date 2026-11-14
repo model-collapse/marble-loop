@@ -528,7 +528,7 @@ runs/<run-id>/
 | M0 ✅ (2026-11-12) | Adapter schema + `bench validate/calibrate/eval`; toy benchmarks; local launcher; adapters for KernelBench / AlgoTune / autoresearch — see §12.1 |
 | M1 ✅ (2026-11-13) | Controller: tree, git worktrees, clean-room eval, noise-aware comparison + full-mode confirmation; greedy loop with the 5 roles — see §12.2 |
 | M2 ✅ (2026-11-14) | Inspector: expectations, rule detectors, LLM investigation; Supervisor; fault-injection suite green — see §12.3 |
-| M3 | Budget-aware MCTS + lesson pools + citations; resource planner + `resources.yaml`; template launcher |
+| M3 ✅ (2026-11-14) | Budget-aware MCTS + lesson lifecycle + citations; resource planner + `resources.yaml` — see §12.4 (template launcher and parallel trees moved to M5) |
 | M4 | Plugin (skill, MCP, hooks), report, docs; record/replay CI |
 | M5 | Real-benchmark runs + ablations; public release |
 
@@ -588,6 +588,30 @@ Carry-overs:
 - Python stack dumps for stuck jobs need ptrace (`kernel.yama.ptrace_scope=1` blocks py-spy).
 - Agent calls are only bounded (timeout, $ cap); mid-call monitoring needs stream-json (M4).
 - Inspection lessons go to incidents.jsonl; feeding them into the lesson pool is M3 (§5.5).
+
+
+### 12.4 M3 status and carry-overs
+Done: `policy.py` (budget-aware MCTS: UCT over R = G·clip(t/L)^w, draft/improve, stagnation re-opens the
+root, Thompson sampling over approach families), `lessons.py` (typed lessons, gates G1–G5, Beta trust from
+citations ×0.25 and lesson tests ×1, confirmed at P ≥ 0.66 / refuted at ≤ 0.34 with ≥ 1 test, scoped
+negatives with TTL, inspection lessons after 2 occurrences), scheduled lesson tests, `resources.py` +
+`marble run plan` → `resource_plan.md` / `resources.yaml` → `run start --resources`. 108 tests.
+
+Live validation (plan → resources.yaml → supervised start; 6 iterations each, 0 incidents):
+
+| Run | Result | Cost | Wall | Search behaviour |
+|---|---|---|---|---|
+| AlgoTune ode_brusselator (CPU) | 1.0x → 799.8x quick / 799.4x full | $1.04 | 20 min | branched numba vs C at node #2; lesson test of the C-port lesson regressed −11.5% → later refuted |
+| KernelBench LayerNorm (A10G) | 1.0x → 4.88x (confirmed 4.88x) | $1.07 | 22 min | sibling branches; lesson test → refuted; stagnation re-opened root → second family (persistent kernel, 4.58x) |
+
+Note: speedups use MARBLE's harness (min over fresh-process repeats, geometric mean), not AlgoTune's official
+evaluator; leaderboard comparisons need the official evaluator (open).
+
+Carry-overs (M4/M5):
+- Parallel trees + shared pool quotas, canary rollout and diversity guard (§5.5.4/5.5.7) need >1 tree.
+- Context fingerprints for stale negative lessons and explicit revival probes (§5.5.11 (6)(7)).
+- G2 is rule-based; an LLM integrity classifier and an LLM dedup are optional upgrades.
+- Template launcher (ssh / Slurm / K8s) for `resources.yaml`.
 
 ---
 
