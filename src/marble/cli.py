@@ -162,14 +162,56 @@ def cmd_run_start(args) -> int:
             raise SpecError(f"--model expects role=model-id with role in {sorted(cfg.models)}")
         cfg.models[role] = model
     cfg.inspector = args.inspector
+    launcher = None
+    if args.resources:
+        from . import resources as R
+
+        data = R.load_resources(Path(args.resources))
+        R.apply_to_config(data, cfg)
+        launcher = LocalLauncher(R.slots_from(data))
     if (out / "tree.sqlite").exists():
         print(f"✗ {out} already contains a run; use `marble run resume {out}`", file=sys.stderr)
         return 1
-    ctl = Controller(out, _launcher(args), cfg)
+    ctl = Controller(out, launcher or _launcher(args), cfg)
     if args.supervise:
         return _supervise(out, args)
     best = ctl.run()
     print(f"\nbest: node #{best.id} {ctl.spec.score.key}={best.score:.6g}; report: {out / 'report.md'}")
+    return 0
+
+
+def cmd_run_plan(args) -> int:
+    import yaml
+
+    from . import resources as R
+    from .evaluate import run_tool
+
+    spec = load_spec(args.benchmark)
+    validate_spec(spec)
+    out = Path(args.out) if args.out else _default_out(spec.name, "plan")
+    out.mkdir(parents=True, exist_ok=True)
+    hw = R.probe()
+    launcher = _launcher(args)
+    calib_modes = [m for m, c in spec.evaluate.items() if c.calibration_only] or [spec.default_mode]
+    print(f"Planning {spec.name}: probing hardware, calibrating baseline ({calib_modes[0]}, x{args.repeats}) …", flush=True)
+    cal = calibrate(spec, launcher=launcher, out_dir=out / "calibration", modes=calib_modes[:1], repeats=args.repeats)
+    if cal["status"] != "ok":
+        print(f"✗ baseline calibration failed: {cal['modes']}", file=sys.stderr)
+        return 2
+    analyze_s = 0.0
+    for tool in spec.analyze if not args.no_analyze else []:
+        r = run_tool(spec, tool, launcher=launcher, out_dir=out / "analyze" / tool.name)
+        print(f"  analyze tool {tool.name}: {r['status']} {r.get('duration_s', 0):.0f}s", flush=True)
+        analyze_s += r.get("duration_s", 0.0) or 0.0
+    gpus = None if args.gpus is None else ([] if args.gpus in ("", "none") else [int(g) for g in args.gpus.split(",")])
+    past = R.past_iterations(Path(args.runs_root), spec.bench_dir.name)
+    plan = R.make_plan(spec, hw=hw, calibration=cal, hours=args.hours, budget_usd=args.budget_usd, gpus=gpus,
+                       past_costs=[c for c, _ in past], past_seconds=[t for _, t in past], analyze_s=analyze_s)
+    (out / "resources.yaml").write_text(yaml.safe_dump(plan["resources"], sort_keys=False))
+    (out / "resource_plan.md").write_text(plan["markdown"])
+    (out / "hardware.json").write_text(json.dumps(hw, indent=2))
+    print(plan["markdown"])
+    print(f"wrote {out / 'resources.yaml'} and {out / 'resource_plan.md'}")
     return 0
 
 
@@ -300,9 +342,21 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--model", action="append", help="role=model-id override (repeatable)")
     rs.add_argument("--inspector", choices=["llm", "rule", "off"], default="llm", help="job watchdog investigations")
     rs.add_argument("--supervise", action="store_true", help="run under the supervisor (restarts on crash/hang)")
+    rs.add_argument("--resources", help="resources.yaml from `marble run plan` (slots, budget, models, run settings)")
     sup_opts(rs)
     slots(rs)
     rs.set_defaults(func=cmd_run_start)
+
+    rp = run.add_parser("plan", help="probe hardware, calibrate, and propose resources.yaml + resource_plan.md")
+    rp.add_argument("benchmark")
+    rp.add_argument("--out", help="plan directory (default: runs/<name>-plan-<time>)")
+    rp.add_argument("--hours", type=float, default=2.0)
+    rp.add_argument("--budget-usd", type=float, default=20.0)
+    rp.add_argument("--repeats", type=int, default=2, help="baseline calibration repeats")
+    rp.add_argument("--no-analyze", action="store_true", help="do not time the analyze tools")
+    rp.add_argument("--runs-root", default="runs", help="earlier runs used for cost estimates")
+    slots(rp)
+    rp.set_defaults(func=cmd_run_plan)
 
     rr = run.add_parser("resume", help="continue a stopped run (same config)")
     rr.add_argument("run")
