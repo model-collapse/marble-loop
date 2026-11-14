@@ -628,7 +628,7 @@ Live checks: headless `claude -p --plugin-dir plugins/marble` answered run quest
 (0.796 → 0.000754 val_mse, $0.46) replays exactly at $0.
 
 Before publishing (owner decisions):
-- Replace the placeholder author "MARBLE Dev <marble-dev@localhost>" (commits and plugin.json).
+- Author: Charlie Yang <charlie.yang@outlook.com> (decided 2026-11-14; commits and plugin.json updated).
 - Choose the repository / marketplace (`<owner>/<repo>` in the plugin README install line), check the
   `marble-loop` PyPI name, decide on the upstream PRs to KernelBench and AlgoTune.
 

@@ -37,7 +37,7 @@ marble bench calibrate kernelbench/problems/kb-l1-088-mingptnewgelu   # uses the
 - **Memory**: many level-1 shapes target 80 GB GPUs (e.g. ReLU/Softmax/GELU inputs are 6.4 GB) and OOM
   in the correctness check on 24 GB GPUs. The starter subset only uses problems that fit an A10G.
 - Upstream fix needed: `_process_input_tensor` cast integer inputs (class targets) to fp32 →
-  `../marble-benchmarks/patches/kernelbench-keep-integer-input-dtype.patch`.
+  `benchmarks/patches/kernelbench-keep-integer-input-dtype.patch` (apply in the KernelBench checkout: `git apply …`).
 - Analyze tools: `nsys` (timeline) and `ncu` (counters; needs `NVreg_RestrictProfilingToAdminUsers=0`).
 
 ## AlgoTune
@@ -54,7 +54,7 @@ python algotune/make_tasks.py --subset algotune/subset.txt            # fetches 
   (memoisation does not help: tested 0.96×); solutions return as JSON and are verified with
   `is_solution` in the driver (`python -I`, candidate dir not importable). A candidate that patched
   `is_solution` in its own process and returned wrong answers was rejected (10/10 invalid).
-- Upstream fix needed for the official harness: `../marble-benchmarks/patches/algotune-sysmodules-snapshot.patch`.
+- Upstream fix needed for the official harness: `benchmarks/patches/algotune-sysmodules-snapshot.patch` (apply in the AlgoTune checkout).
 
 ## autoresearch
 
