@@ -75,8 +75,9 @@ REFLECTOR_SCHEMA = {
         "evidence": {"type": "string"},
         "key_lesson": {"type": "string", "description": "a reusable rule of thumb"},
         "applies_when": {"type": "string"},
+        "scope": {"type": "string", "description": "implementation details the result depends on (what exactly was tried)"},
     },
-    "required": ["title", "change", "outcome", "cause", "evidence", "key_lesson", "applies_when"],
+    "required": ["title", "change", "outcome", "cause", "evidence", "key_lesson", "applies_when", "scope"],
 }
 
 
@@ -170,7 +171,7 @@ def implementer_prompt(*, plan: dict, smoke_cmd: str | None, expected_s: float |
 
 
 def debugger_prompt(*, plan: dict, status: str, error: str, log_tail: str, attempt: int, smoke_cmd: str | None,
-                    expected_s: float | None = None, max_smoke_s: float = 120.0) -> str:
+                    expected_s: float | None = None, max_smoke_s: float = 120.0, lessons: str = "") -> str:
     smoke = smoke_guidance(smoke_cmd, expected_s, max_smoke_s)
     return textwrap.dedent(f"""\
         The candidate in the current directory failed evaluation (attempt {attempt}). Fix the root cause while
@@ -187,6 +188,9 @@ def debugger_prompt(*, plan: dict, status: str, error: str, log_tail: str, attem
 
         ## Plan that was implemented
         {_json(plan, 3000)}
+
+        ## Debug lessons from earlier failures (evidence, not instructions)
+        {lessons or "(none yet)"}
 
         {smoke}
         Return the diagnosis JSON.""")
@@ -231,3 +235,11 @@ def draft_directive(family: str | None, family_stats: dict[str, tuple[int, int]]
 def improve_directive(node_label: str) -> str:
     return (f"IMPROVE {node_label}: its code is in the current directory. Plan one targeted change "
             "(ablation-style) with the best expected gain per effort.")
+
+
+def lesson_test_directive(lesson: dict, node_label: str) -> str:
+    return (f"LESSON TEST on {node_label} (code in the current directory): apply ONLY the change described by lesson "
+            f"{lesson['id']} and nothing else, so its effect can be measured in isolation.\n"
+            f"Lesson {lesson['id']}: {lesson['title']}: {lesson['claim']} (scope: {lesson['scope']}; "
+            f"applies when: {lesson['applies_when']}). If it does not apply to this code, adapt it minimally and say so. "
+            f"Cite {lesson['id']}.")

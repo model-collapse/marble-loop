@@ -201,6 +201,7 @@ class JobWatch:
         self.llm_extended = False
         self.kill_reason: str | None = None
         self.abandon = False
+        self.lesson: str | None = None
         self._busy = False
         self._lock = threading.Lock()
 
@@ -264,6 +265,7 @@ class JobWatch:
                                         evidence={"samples": ev.get("recent_samples"),
                                                   "processes": ev.get("processes"), "lesson": v.lesson}))
             self.abandon = action == "kill_and_abandon"
+            self.lesson = v.lesson or None
             handle.cancel(self.kill_reason)
         finally:
             self._busy = False

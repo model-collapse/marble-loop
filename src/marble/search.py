@@ -33,6 +33,7 @@ from .agents import EDIT_TOOLS, READ_TOOLS, AgentCall, AgentResult, run_agent
 from .cleanroom import protected_manifest
 from .evaluate import EvalSummary, run_repeats, run_tool
 from .launcher import LocalLauncher
+from .lessons import LessonStore
 from .runstate import Node, RunConfig, RunState
 from .spec import BenchmarkSpec, load_spec, render, validate_spec
 from .workspace import Workspace
@@ -88,6 +89,8 @@ class Controller:
         self.t_start = time.monotonic()
         self.manifest_path = self.dir / "protected_manifest.json"
         self.incidents = insp.IncidentLog(self.dir, self.state.event)
+        self.lessons = LessonStore(self.state.db, self.state.event)
+        self._lesson_test: dict | None = None
         self._last_watches: list[insp.JobWatch] = []
         if self.cfg.inspector == "llm":
             self.investigator = insp.make_llm_investigator(
@@ -220,12 +223,8 @@ class Controller:
             rows.append(f"#{n.id} (from #{n.parent}) {n.kind:<7} {n.eval_status or '-':<14} score={s:<12}{full} {verdict:<9} {idea}")
         return "\n".join(rows) or "(none yet)"
 
-    def lessons_text(self) -> str:
-        ls = self.state.lessons()[-self.cfg.lessons_in_prompt:]
-        if not ls:
-            return "(none yet)"
-        return "\n".join(f"- {l['id']} [{l.get('outcome')}/{l.get('cause')}] {l.get('title')}: {l.get('key_lesson')} "
-                         f"(applies when: {l.get('applies_when')})" for l in ls)
+    def lessons_text(self, query: str = "", types: tuple[str, ...] | None = None) -> str:
+        return self.lessons.format(self.lessons.for_prompt(query, self.cfg.lessons_in_prompt, types))
 
     def smoke_cmd(self) -> str | None:
         mode = self.spec.mode(self.cfg.eval_mode)
@@ -334,7 +333,23 @@ class Controller:
     def _new_best_ids(self) -> set[int]:
         return {e["node"] for e in self.state.events() if e["type"] == "new_best"}
 
+    def _lineage(self, node: Node) -> set[int]:
+        ids, cur = set(), node
+        while cur is not None:
+            ids.add(cur.id)
+            cur = self.state.get(cur.parent) if cur.parent is not None else None
+        return ids
+
     def select(self) -> tuple[Node, str]:
+        self._lesson_test = None
+        done = sum(1 for n in self.state.nodes() if n.kind != "root" and n.finished)
+        every = self.cfg.lesson_test_every
+        if every and done and done % every == every - 1:
+            best = self.state.best()
+            cand = self.lessons.test_candidate(exclude_nodes=self._lineage(best))
+            if cand is not None:
+                self._lesson_test = cand
+                return best, "lesson_test"
         if self.cfg.search == "greedy":
             return self.state.best(), "improve"
         pc = policy.PolicyConfig(c_uct=self.cfg.c_uct, max_children=self.cfg.max_children,
@@ -348,6 +363,9 @@ class Controller:
         return {n.id: n.family for n in self.state.nodes() if n.family}
 
     def directive(self, parent: Node, action: str, node: Node) -> str:
+        if action == "lesson_test" and self._lesson_test:
+            self.state.event("lesson_test", node=node.id, lesson=self._lesson_test["id"])
+            return roles.lesson_test_directive(self._lesson_test, f"node #{parent.id}")
         if action != "draft":
             return roles.improve_directive(f"node #{parent.id}")
         stats = policy.family_stats(self.state.nodes(), self._families())
@@ -374,9 +392,11 @@ class Controller:
         findings = self.findings_for(parent, node, wt)
         # 2. plan
         directive = self.directive(parent, action, node)
+        lq = json.dumps(findings)[:3000]
+        sol_types = ("solution_pos", "solution_neg", "impl_note", "inspection")
         pr = self.agent("planner", node, cwd=wt, tools=READ_TOOLS, schema=roles.PLANNER_SCHEMA,
                         prompt=roles.planner_prompt(findings=findings, history=self.history(),
-                                                    lessons=self.lessons_text(), best_label=f"node #{parent.id}",
+                                                    lessons=self.lessons_text(lq, sol_types), best_label=f"node #{parent.id}",
                                                     directive=directive))
         if not pr.ok:
             return self._abort(node, f"planner failed: {pr.error}")
@@ -392,7 +412,7 @@ class Controller:
                     "or explain concretely what is different this time.")
             pr2 = self.agent("planner", node, cwd=wt, tools=READ_TOOLS, schema=roles.PLANNER_SCHEMA,
                              prompt=roles.planner_prompt(findings=findings, history=self.history(),
-                                                         lessons=self.lessons_text(), best_label=f"node #{parent.id}",
+                                                         lessons=self.lessons_text(lq, sol_types), best_label=f"node #{parent.id}",
                                                          directive=directive) + note)
             if pr2.ok:
                 plan = pr2.output
@@ -413,7 +433,6 @@ class Controller:
             node.status, node.finished = "no_change", time.time()
             self.state.update(node)
             self.log("    implementer made no change")
-            self.reflect(parent, node, plan, outcome="failed: no change made")
             return False
         dup = self._duplicate_of(node)
         if dup is not None:
@@ -448,7 +467,9 @@ class Controller:
                             prompt=roles.debugger_prompt(plan=plan, status=bad.status, error=bad.error or "",
                                                          log_tail=log_tail, attempt=attempt, smoke_cmd=self.smoke_cmd(),
                                                          expected_s=self.expected_eval_s(self.cfg.eval_mode),
-                                                         max_smoke_s=self.cfg.max_smoke_s))
+                                                         max_smoke_s=self.cfg.max_smoke_s,
+                                                         lessons=self.lessons_text(f"{bad.error} {log_tail[-1500:]}",
+                                                                                   ("debug", "inspection"))))
             if not dr.ok:
                 break
             self.state.event("debug", node=node.id, attempt=attempt, diagnosis=dr.output.get("diagnosis"))
@@ -499,8 +520,17 @@ class Controller:
         is_imp = beat_best
         self.log(f"    → {verdict}")
         self.state.event("verdict", node=node.id, improved=is_imp, gain=gain, threshold=thr, verdict=verdict)
-        # 6. reflect
-        self.reflect(parent, node, plan, outcome=verdict)
+        # 6. lessons: citations, lesson test outcome, inspection lessons, reflection, expiry
+        helped = bool(beat_parent) if ok else None
+        self.lessons.record_citations(plan.get("cites") or [], helped=helped, node=node.id)
+        if action == "lesson_test" and self._lesson_test and ok:
+            t = self.lessons.record_test(self._lesson_test["id"], helped=bool(beat_parent), node=node.id)
+            self.log(f"    lesson test {self._lesson_test['id']}: {'helped' if beat_parent else 'did not help'} → {t['status']}")
+        for w in self._last_watches:
+            if w.lesson:
+                self.lessons.add_inspection(w.lesson, node=node.id, iteration=node.id)
+        self.reflect(parent, node, plan, outcome=verdict, gain=gain, threshold=thr)
+        self.lessons.expire(iteration=node.id)
         return is_imp
 
     # ------------------------------------------------------------------ steps
@@ -525,7 +555,8 @@ class Controller:
             cache.write_text(json.dumps(findings, indent=2))
         return findings
 
-    def reflect(self, parent: Node, node: Node, plan: dict, outcome: str) -> None:
+    def reflect(self, parent: Node, node: Node, plan: dict, outcome: str, gain: float = 0.0,
+                threshold: float = 0.0) -> None:
         child = self.state.get(node.id)
         diff = self.ws.diff(parent.sha, child.sha) if child.sha and parent.sha and child.sha != parent.sha else "(no change)"
         brief = lambda n: {"id": n.id, "score": n.score, "score_std": n.score_std, "eval_status": n.eval_status,
@@ -538,8 +569,14 @@ class Controller:
             return
         self.state.update(node)  # persist reflector cost
         if rr.ok:
-            lesson = self.state.add_lesson({"node": node.id, "parent": parent.id, **rr.output})
-            self.log(f"    lesson {lesson['id']}: {lesson.get('title')}")
+            g = self.lessons.add_reflection(rr.output, node=node.id, parent=parent.id, family=child.family, gain=gain,
+                                            threshold=threshold, node_failed=child.eval_status != "ok", iteration=node.id)
+            if g.gate in ("G1", "G2"):
+                self.incidents.add(insp.Incident("lesson_rejected", node.id, f"{g.gate}: {g.reason}: {rr.output.get('title')}",
+                                                 action="rejected"))
+            l = self.lessons.get(g.lesson_id) if g.lesson_id else None
+            self.log(f"    lesson {g.lesson_id or '-'}: {(l or {}).get('type', '')}/{(l or {}).get('status', '')} "
+                     f"{rr.output.get('title')}" + (f"  [{g.gate}: {g.reason}]" if g.gate else ""))
 
     def _commit(self, node: Node, wt: Path, msg: str) -> bool:
         reverted = self.ws.enforce_editable(wt, self.spec.editable)
@@ -635,6 +672,9 @@ class Controller:
         if best.id != root.id:
             (self.dir / "best.patch").write_text(self.ws.diff(root.sha, best.sha, max_chars=10**7))
             lines += ["", f"Best change vs baseline: `best.patch`"]
+        summ = self.lessons.summary()
+        if summ:
+            lines += ["", "## Lessons", "", ", ".join(f"{k}: {v}" for k, v in sorted(summ.items()))]
         incs = self.incidents.all()
         if incs:
             lines += ["", f"## Inspector incidents ({len(incs)})", "", "| node | kind | action | detail |", "|---|---|---|---|"]

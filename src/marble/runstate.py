@@ -114,7 +114,8 @@ class RunConfig:
     max_children: int = 2               # N_i: improve attempts per valid node
     stagnation_n: int = 3               # n_s: re-open the root (draft) after this many candidates without a new best
     time_penalty_w: float = -0.07       # w in R = G * (t/L)^w
-    seed: int = 0          # agents may run the evaluator as a smoke test only if it is this fast    # re-plan once if the chosen idea is this similar to an earlier one
+    seed: int = 0
+    lesson_test_every: int = 5          # every n-th iteration tests one unverified positive lesson (0 = off)          # agents may run the evaluator as a smoke test only if it is this fast    # re-plan once if the chosen idea is this similar to an earlier one
 
     @classmethod
     def from_dict(cls, d: dict) -> "RunConfig":
@@ -211,6 +212,13 @@ class RunState:
         return lesson
 
     def lessons(self) -> list[dict]:
+        """Lessons that passed admission (lesson store table if present; legacy lessons.jsonl otherwise)."""
+        try:
+            from .lessons import FIELDS
+            rows = self.db.execute(f"SELECT {', '.join(FIELDS)} FROM lessons WHERE status != 'rejected' ORDER BY created").fetchall()
+            return [dict(zip(FIELDS, r)) for r in rows]
+        except sqlite3.OperationalError:
+            pass
         p = self.dir / "lessons.jsonl"
         if not p.exists():
             return []

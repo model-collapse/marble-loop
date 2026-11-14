@@ -233,3 +233,24 @@ def test_mcts_actions_and_draft_directive(tmp_path, launcher, toy_fit_copy, monk
     assert "DRAFT" in planner[0] and "IMPROVE" in planner[1]
     assert all(n.family for n in ctl.state.nodes()[1:])
     assert any(e["type"] == "draft_family" for e in ctl.state.events())
+
+
+def test_lesson_test_is_scheduled_and_updates_trust(tmp_path, launcher, toy_fit_copy, monkeypatch):
+    # iter 1 (draft) poly6 -> lesson L0001 (solution_pos). iter 2 improves; iter 3 is scheduled as a lesson test
+    # on the best; the lesson's origin (node 2) is in the best's lineage, so it can only be tested from another branch.
+    codes = [(POLY_MODEL, {}), (POLY_MODEL.replace(", 6)", ", 8)"), {}), (POLY_MODEL.replace(", 6)", ", 7)"), {}),
+             (POLY_MODEL.replace(", 6)", ", 5)"), {})]
+    fake = FakeAgent(codes)
+    monkeypatch.setattr(search, "run_agent", fake)
+    ctl = _controller(tmp_path, toy_fit_copy, launcher, max_iterations=3, max_no_improve=10, lesson_test_every=2)
+    # Plant an untested positive lesson from an unrelated node so a test candidate exists.
+    ctl.lessons.add_reflection({"title": "unrelated idea", "change": "x", "outcome": "improved", "cause": "success",
+                                "evidence": "e", "key_lesson": "an unrelated rule", "applies_when": "a", "scope": "s"},
+                               node=999, parent=1, family="other", gain=0.5, threshold=0.05, node_failed=False, iteration=0)
+    ctl.run()
+    kinds = [n.kind for n in ctl.state.nodes()]
+    assert "lesson_test" in kinds
+    ev = [e for e in ctl.state.events() if e["type"] in ("lesson_test", "lesson_tested")]
+    assert ev and ev[0]["type"] == "lesson_test"
+    tested = [e for e in ctl.state.events() if e["type"] == "lesson_tested"]
+    assert tested and ctl.lessons.get(tested[0]["id"])["tests"] == 1

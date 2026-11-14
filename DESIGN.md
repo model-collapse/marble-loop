@@ -277,7 +277,7 @@ can therefore cost at most one extra tree a few evals.
 - **Trust update:** Beta(α, β) per lesson. A lesson test counts as weight 1. A citation outcome
   (citing node beat or lost to its parent) counts as weight 0.25, because it is confounded and
   self-reported.
-  `confirmed` if P(helpful) > 0.8 with ≥ 1 test; `refuted` if < 0.2. Confirmed lessons decay
+  `confirmed` if P(helpful) ≥ 0.66 with ≥ 1 test (prior Beta(1,1): one clean successful test); `refuted` if ≤ 0.34 with ≥ 1 test (implemented in M3). Confirmed lessons decay
   (α, β × 0.9 every N iterations), so they are re-tested if they stay heavily used.
 - **Citation honesty:** the Reflector compares cited lessons against the actual diff and flags
   citations with no matching change. A tree's citation-accuracy rate lowers the weight its
