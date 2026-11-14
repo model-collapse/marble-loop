@@ -93,14 +93,20 @@ class RunConfig:
         "implementer": "us.anthropic.claude-sonnet-5-5",
         "debugger": "us.anthropic.claude-sonnet-5-5",
         "reflector": "us.anthropic.claude-haiku-5-5",
+        "inspector": "us.anthropic.claude-haiku-5-5",
     })
     role_budget_usd: dict[str, float] = field(default_factory=lambda: {
-        "analyst": 1.0, "planner": 1.5, "implementer": 3.0, "debugger": 2.0, "reflector": 0.3,
+        "analyst": 1.0, "planner": 1.5, "implementer": 3.0, "debugger": 2.0, "reflector": 0.3, "inspector": 0.15,
     })
     role_timeout_s: dict[str, float] = field(default_factory=lambda: {
         "analyst": 600, "planner": 600, "implementer": 1500, "debugger": 1200, "reflector": 300,
     })
     lessons_in_prompt: int = 12
+    inspector: str = "llm"              # llm | rule | off  (job watchdog investigations)
+    stall_s: float = 180.0              # no output + no CPU + idle GPU this long = stalled
+    repeat_failure_limit: int = 2       # same failure signature this many times in a row -> stop debugging
+    plan_similarity_max: float = 0.8
+    max_smoke_s: float = 120.0          # agents may run the evaluator as a smoke test only if it is this fast    # re-plan once if the chosen idea is this similar to an earlier one
 
     @classmethod
     def from_dict(cls, d: dict) -> "RunConfig":

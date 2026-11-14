@@ -209,6 +209,7 @@ def run_repeats(
     keep_workdir: bool = False,
     stop_on_failure: bool = True,
     on_result: Callable[[int, EvalResult], None] | None = None,
+    on_sample_factory: Callable[[int], Callable[[JobHandle, Sample], None]] | None = None,
 ) -> EvalSummary:
     repeats = repeats or spec.noise.repeats
     manifest = manifest if manifest is not None else protected_manifest(spec)
@@ -216,11 +217,12 @@ def run_repeats(
     results = []
     for i in range(repeats):
         r = run_eval(spec, launcher=launcher, out_dir=Path(out_dir) / f"rep{i}", mode=mode_name,
-                     candidate=candidate, manifest=manifest, keep_workdir=keep_workdir)
+                     candidate=candidate, manifest=manifest, keep_workdir=keep_workdir,
+                     on_sample=on_sample_factory(i) if on_sample_factory else None)
         results.append(r)
         if on_result:
             on_result(i, r)
-        if stop_on_failure and r.status in ("failed", "timeout", "integrity_error", "invalid_output"):
+        if stop_on_failure and r.status in ("failed", "timeout", "integrity_error", "invalid_output", "cancelled"):
             break
     return EvalSummary(mode=mode_name, results=results)
 

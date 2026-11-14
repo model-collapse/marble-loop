@@ -161,10 +161,13 @@ def cmd_run_start(args) -> int:
         if role not in cfg.models or not model:
             raise SpecError(f"--model expects role=model-id with role in {sorted(cfg.models)}")
         cfg.models[role] = model
+    cfg.inspector = args.inspector
     if (out / "tree.sqlite").exists():
         print(f"✗ {out} already contains a run; use `marble run resume {out}`", file=sys.stderr)
         return 1
     ctl = Controller(out, _launcher(args), cfg)
+    if args.supervise:
+        return _supervise(out, args)
     best = ctl.run()
     print(f"\nbest: node #{best.id} {ctl.spec.score.key}={best.score:.6g}; report: {out / 'report.md'}")
     return 0
@@ -187,6 +190,29 @@ def cmd_run_resume(args) -> int:
     return 0
 
 
+def _slot_args(args) -> list[str]:
+    a = []
+    if args.gpus is not None:
+        a += ["--gpus", args.gpus]
+    a += ["--cpu-slots", str(args.cpu_slots)]
+    if args.cpus_per_slot:
+        a += ["--cpus-per-slot", str(args.cpus_per_slot)]
+    if args.pin:
+        a += ["--pin"]
+    return a
+
+
+def _supervise(run_dir: Path, args) -> int:
+    from .supervisor import supervise
+
+    return supervise(run_dir, _slot_args(args), max_restarts=args.max_restarts,
+                     heartbeat_stale_s=args.heartbeat_stale_s, progress_stale_s=args.progress_stale_s)
+
+
+def cmd_run_supervise(args) -> int:
+    return _supervise(Path(args.run), args)
+
+
 def cmd_run_status(args) -> int:
     from .runstate import RunState
 
@@ -195,7 +221,11 @@ def cmd_run_status(args) -> int:
     nodes = st.nodes()
     best = st.best()
     print(f"run {Path(args.run).resolve()}  benchmark {cfg.benchmark}")
-    print(f"cost ${st.total_cost():.2f} / ${cfg.budget_usd:.2f}   nodes {len(nodes)}   lessons {len(st.lessons())}")
+    from .inspector import IncidentLog
+
+    incs = IncidentLog(Path(args.run)).all()
+    print(f"cost ${st.total_cost():.2f} / ${cfg.budget_usd:.2f}   nodes {len(nodes)}   lessons {len(st.lessons())}"
+          f"   incidents {len(incs)}")
     if best:
         print(f"best: node #{best.id} score {best.score:.6g}")
     for n in nodes[-args.last:]:
@@ -251,7 +281,12 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--cpus-per-slot", type=int)
         sp.add_argument("--pin", action="store_true")
 
-    rs = run.add_parser("start", help="start a greedy analyze-refine run (M1)")
+    def sup_opts(sp):
+        sp.add_argument("--max-restarts", type=int, default=3)
+        sp.add_argument("--heartbeat-stale-s", type=float, default=120.0)
+        sp.add_argument("--progress-stale-s", type=float, default=3 * 3600.0)
+
+    rs = run.add_parser("start", help="start a greedy analyze-refine run")
     rs.add_argument("benchmark")
     rs.add_argument("--out", help="run directory (default: runs/<name>-run-<time>)")
     rs.add_argument("--budget-usd", type=float, default=20.0)
@@ -263,6 +298,9 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--mode", help="eval mode for candidates (default: the spec's default_mode)")
     rs.add_argument("--no-analyze", action="store_true", help="skip the benchmark's analyze tools")
     rs.add_argument("--model", action="append", help="role=model-id override (repeatable)")
+    rs.add_argument("--inspector", choices=["llm", "rule", "off"], default="llm", help="job watchdog investigations")
+    rs.add_argument("--supervise", action="store_true", help="run under the supervisor (restarts on crash/hang)")
+    sup_opts(rs)
     slots(rs)
     rs.set_defaults(func=cmd_run_start)
 
@@ -274,6 +312,12 @@ def build_parser() -> argparse.ArgumentParser:
     rr.add_argument("--max-no-improve", type=int)
     slots(rr)
     rr.set_defaults(func=cmd_run_resume)
+
+    sv = run.add_parser("supervise", help="(re)start a run's controller and restart it on crash/hang")
+    sv.add_argument("run")
+    sup_opts(sv)
+    slots(sv)
+    sv.set_defaults(func=cmd_run_supervise)
 
     rt = run.add_parser("status", help="show a run's nodes and spend")
     rt.add_argument("run")

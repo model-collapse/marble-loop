@@ -141,10 +141,22 @@ def planner_prompt(*, findings: dict, history: str, lessons: str, best_label: st
         guessing. Cite lesson ids you rely on.""")
 
 
-def implementer_prompt(*, plan: dict, smoke_cmd: str | None) -> str:
-    smoke = (f"You may smoke-test with:\n```\n{smoke_cmd}\n```\n(run it from the current directory; it is the "
-             "benchmark's own quick evaluator; the official score is measured separately in a clean room).") \
-        if smoke_cmd else "Check syntax / run small self-tests where possible."
+def smoke_guidance(smoke_cmd: str | None, expected_s: float | None, max_smoke_s: float) -> str:
+    if not smoke_cmd:
+        return "Check syntax / run small self-tests where possible."
+    if expected_s is not None and expected_s > max_smoke_s:
+        return (f"The benchmark's evaluator takes about {expected_s / 60:.0f} min per run, so do NOT run it as a smoke "
+                "test (the official evaluation runs right after you finish). Instead check syntax and imports, and run "
+                "small, fast self-tests of the code you changed (a few seconds each). For reference, the evaluator is:\n"
+                f"```\n{smoke_cmd}\n```")
+    t = f" (about {expected_s:.0f} s per run)" if expected_s else ""
+    return (f"You may smoke-test with{t}:\n```\n{smoke_cmd}\n```\n(run it from the current directory; it is the "
+            "benchmark's own quick evaluator; the official score is measured separately in a clean room).")
+
+
+def implementer_prompt(*, plan: dict, smoke_cmd: str | None, expected_s: float | None = None,
+                       max_smoke_s: float = 120.0) -> str:
+    smoke = smoke_guidance(smoke_cmd, expected_s, max_smoke_s)
     return textwrap.dedent(f"""\
         Implement this plan in the current directory, editing only the editable files.
 
@@ -156,8 +168,9 @@ def implementer_prompt(*, plan: dict, smoke_cmd: str | None) -> str:
         When done, return the summary JSON.""")
 
 
-def debugger_prompt(*, plan: dict, status: str, error: str, log_tail: str, attempt: int, smoke_cmd: str | None) -> str:
-    smoke = f"You may re-run the quick evaluator to check your fix:\n```\n{smoke_cmd}\n```" if smoke_cmd else ""
+def debugger_prompt(*, plan: dict, status: str, error: str, log_tail: str, attempt: int, smoke_cmd: str | None,
+                    expected_s: float | None = None, max_smoke_s: float = 120.0) -> str:
+    smoke = smoke_guidance(smoke_cmd, expected_s, max_smoke_s)
     return textwrap.dedent(f"""\
         The candidate in the current directory failed evaluation (attempt {attempt}). Fix the root cause while
         keeping the intent of the plan. Do not suppress errors with try/except, do not fall back to the
