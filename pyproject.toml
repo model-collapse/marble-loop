@@ -1,10 +1,25 @@
 [project]
 name = "marble-loop"
-version = "0.0.1"
+version = "0.1.0"
 description = "MARBLE: Monitored Analyze-Refine Budgeted Loop Engine - automated research on white-box benchmarks"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Charlie Yang", email = "charlie.yang@outlook.com" }]
+keywords = ["automated research", "agents", "claude", "benchmarks", "optimization", "mcts", "kernels"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "pyyaml>=6",
     "psutil>=5.9",
@@ -13,11 +28,17 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "numpy>=1.24"]
 
+[project.urls]
+Homepage = "https://github.com/model-collapse/marble-loop"
+Repository = "https://github.com/model-collapse/marble-loop"
+Issues = "https://github.com/model-collapse/marble-loop/issues"
+Documentation = "https://github.com/model-collapse/marble-loop/blob/main/docs/quickstart.md"
+
 [project.scripts]
 marble = "marble.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
