@@ -529,7 +529,7 @@ runs/<run-id>/
 | M1 ✅ (2026-11-13) | Controller: tree, git worktrees, clean-room eval, noise-aware comparison + full-mode confirmation; greedy loop with the 5 roles — see §12.2 |
 | M2 ✅ (2026-11-14) | Inspector: expectations, rule detectors, LLM investigation; Supervisor; fault-injection suite green — see §12.3 |
 | M3 ✅ (2026-11-14) | Budget-aware MCTS + lesson lifecycle + citations; resource planner + `resources.yaml` — see §12.4 (template launcher and parallel trees moved to M5) |
-| M4 | Plugin (skill, MCP, hooks), report, docs; record/replay CI |
+| M4 ✅ (2026-11-14) | Plugin (skill, MCP, hooks), report, docs; record/replay CI — see §12.5 |
 | M5 | Real-benchmark runs + ablations; public release |
 
 ### 12.1 M0 status and carry-overs
@@ -612,6 +612,29 @@ Carry-overs (M4/M5):
 - Context fingerprints for stale negative lessons and explicit revival probes (§5.5.11 (6)(7)).
 - G2 is rule-based; an LLM integrity classifier and an LLM dedup are optional upgrades.
 - Template launcher (ssh / Slurm / K8s) for `resources.yaml`.
+
+
+### 12.5 M4 status and carry-overs
+Done: `plugins/marble/` (manifest + icon, `/marble` skill, `.mcp.json`, hooks via `hooks/run.sh`, README,
+LICENSE) passing `claude plugin validate --strict --profile directory`; `marble mcp` (stdio MCP server,
+stdlib only; read-only except `marble_control` → control.json); `marble hook session-start|guard-runs`;
+control.json (stop / pause / resume / pinned planner notes) honoured by the controller; `report.py`
+(report from on-disk state; `marble run report`); run-database migration for older runs; record/replay
+(`marble replay export`, `marble.replay:agent`) with a recorded live fixture replayed exactly in CI;
+README, docs/quickstart.md, Apache-2.0 LICENSE, GitHub Actions workflow. 115 tests.
+
+Live checks: headless `claude -p --plugin-dir plugins/marble` answered run questions through the MCP tools
+(4 turns, $0.03) and ran `/marble status` using the SessionStart summary; recorded toy-fit run
+(0.796 → 0.000754 val_mse, $0.46) replays exactly at $0.
+
+Before publishing (owner decisions):
+- Replace the placeholder author "MARBLE Dev <marble-dev@localhost>" (commits and plugin.json).
+- Choose the repository / marketplace (`<owner>/<repo>` in the plugin README install line), check the
+  `marble-loop` PyPI name, decide on the upstream PRs to KernelBench and AlgoTune.
+
+Carry-overs (M5): parallel trees + shared-pool quotas/canary/diversity guard; template launcher
+(ssh/Slurm/K8s); official-evaluator comparisons (AlgoTune) and ablations; mid-call agent monitoring
+(stream-json); stale-negative fingerprints and revival probes.
 
 ---
 
