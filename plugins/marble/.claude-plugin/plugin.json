@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "marble",
+  "version": "0.1.0",
+  "description": "MARBLE (Monitored Analyze-Refine Budgeted Loop Engine): unattended, budgeted automated research on white-box benchmarks (GPU kernels, solver speed-ups, training speedruns), with tree search, a trust-earning lesson pool, an Inspector against dead loops, and run inspection/steering from Claude Code.",
+  "author": {
+    "name": "MARBLE Dev",
+    "email": "marble-dev@localhost"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["research", "automation", "benchmarks", "optimization", "kernels", "mcts", "agents"],
+  "skills": [
+    "./skills/marble"
+  ]
+}

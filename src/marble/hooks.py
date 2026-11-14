@@ -100,14 +100,21 @@ def session_start() -> int:
     if not runs:
         print(json.dumps({}))
         return 0
+    def recent(d: Path) -> float:
+        ev = d / "events.jsonl"
+        return ev.stat().st_mtime if ev.exists() else 0.0
+
+    ordered = sorted(runs, key=lambda r: (not r[1]["alive"], -recent(r[0])))
     lines = []
-    for d, s in sorted(runs, key=lambda r: (not r[1]["alive"], r[0].name))[:8]:
+    for d, s in ordered[:8]:
         best = s["best"] or {}
+        g = lambda x: "-" if x is None else f"{x:.4g}"
         lines.append(f"- {d.name}: {s['benchmark']}, {'RUNNING' if s['alive'] else 'stopped'}, best "
-                     f"{best.get('score')} (baseline {s['baseline']}), ${s['cost_usd']:.2f}/{s['budget_usd']:.0f}"
+                     f"{g(best.get('score'))} (baseline {g(s['baseline'])}), ${s['cost_usd']:.2f}/{s['budget_usd']:.0f}"
                      + (f", last stop: {s['last_stop']}" if not s["alive"] and s["last_stop"] else ""))
-    ctx = ("MARBLE runs in " + str(_runs_root()) + " (use the marble MCP tools or `/marble status` for details):\n"
-           + "\n".join(lines))
+    more = f"\n(and {len(ordered) - 8} older run(s))" if len(ordered) > 8 else ""
+    ctx = ("MARBLE runs in " + str(_runs_root()) + " at session start (may be stale; use the marble MCP tools "
+           "for current state):\n" + "\n".join(lines) + more)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}}))
     return 0
 
