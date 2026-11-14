@@ -19,5 +19,7 @@
   ],
   "skills": [
     "./skills/marble"
-  ]
+  ],
+  "homepage": "https://github.com/model-collapse/marble-loop",
+  "repository": "https://github.com/model-collapse/marble-loop"
 }

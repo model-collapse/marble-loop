@@ -3,7 +3,7 @@
 ## 1. Install
 
 ```bash
-git clone <this repo> marble && cd marble
+git clone https://github.com/model-collapse/marble-loop.git && cd marble-loop
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q                       # ~1 min, no API calls

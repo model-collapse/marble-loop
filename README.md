@@ -48,7 +48,8 @@ Full design: [`DESIGN.md`](DESIGN.md).
 pip install -e ".[dev]"          # Python >= 3.10; provides the `marble` CLI
 claude --version                 # Claude Code CLI with model access (Anthropic API, Bedrock or Vertex)
 ```
-Claude Code plugin (skill `/marble`, MCP server, hooks): `plugins/marble/` — `claude --plugin-dir plugins/marble`.
+Claude Code plugin (skill `/marble`, MCP server, hooks): `/plugin install marble --marketplace model-collapse/marble-loop`,
+or from a checkout: `claude --plugin-dir plugins/marble`.
 
 ## Quick start
 

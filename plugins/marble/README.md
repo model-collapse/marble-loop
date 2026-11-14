@@ -16,9 +16,9 @@ solutions with Claude Code worker agents and reports what it found and why.
 ## Install
 
 ```
-/plugin install marble --marketplace <owner>/<repo>
+/plugin install marble --marketplace model-collapse/marble-loop
 ```
-(`<owner>/<repo>` is filled in when the repository is published.) For local development:
+For local development (from a checkout of the repository):
 `claude --plugin-dir plugins/marble`.
 
 ## Requirements

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "marble-loop",
+  "description": "MARBLE (Monitored Analyze-Refine Budgeted Loop Engine) plugin for Claude Code.",
+  "owner": {
+    "name": "Charlie Yang",
+    "email": "charlie.yang@outlook.com"
+  },
+  "plugins": [
+    {
+      "name": "marble",
+      "source": "./plugins/marble",
+      "description": "MARBLE: unattended, budgeted automated research on white-box benchmarks, run and steered from Claude Code."
+    }
+  ]
+}
