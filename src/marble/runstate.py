@@ -136,6 +136,16 @@ class RunState:
         self.db = sqlite3.connect(str(self.dir / "tree.sqlite"), check_same_thread=False, isolation_level=None)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced by newer MARBLE versions to runs created by older ones."""
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(nodes)").fetchall()}
+        for f in fields(Node):
+            if f.name not in have:
+                t = str(f.type)
+                sql = "REAL" if "float" in t else "INTEGER" if t.startswith("int") else "TEXT"
+                self.db.execute(f"ALTER TABLE nodes ADD COLUMN {f.name} {sql}")
 
     # ------------------------------------------------------------------ config
     def save_config(self, cfg: RunConfig) -> None:

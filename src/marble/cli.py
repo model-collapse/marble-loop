@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -215,8 +216,29 @@ def cmd_run_plan(args) -> int:
     return 0
 
 
+def cmd_run_report(args) -> int:
+    from . import report as rep
+
+    p = rep.write_report(Path(args.run), stop=None)
+    print(p.read_text() if not args.quiet else str(p))
+    return 0
+
+
+def cmd_run_control(args) -> int:
+    from . import report as rep
+
+    action = "stop" if args.stop else "pause" if args.pause else "run" if args.resume else None
+    data = rep.write_control(Path(args.run), action=action, note=args.note, clear_notes=args.clear_notes)
+    print(json.dumps(data, indent=2))
+    return 0
+
+
 def cmd_run_resume(args) -> int:
+    from . import report as rep
     from .search import Controller
+
+    if rep.read_control(Path(args.run)).get("action") in ("stop", "pause"):
+        rep.write_control(Path(args.run), action="run")
 
     from .runstate import RunState
 
@@ -315,6 +337,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--repeats", type=int, default=3)
     c.set_defaults(func=cmd_calibrate)
 
+    mcp = sub.add_parser("mcp", help="run the MARBLE MCP server on stdio (used by the Claude Code plugin)")
+    mcp.add_argument("--runs-root", default=os.environ.get("MARBLE_RUNS_ROOT", "runs"))
+    mcp.set_defaults(func=lambda a: __import__("marble.mcp_server", fromlist=["serve"]).serve(Path(a.runs_root)))
+
+    hk = sub.add_parser("hook", help="Claude Code hook handlers (used by the plugin)")
+    hk.add_argument("name", choices=["session-start", "guard-runs", "guard"])
+    hk.set_defaults(func=lambda a: __import__("marble.hooks", fromlist=["main"]).main([a.name]))
+
     run = sub.add_parser("run", help="automated research runs").add_subparsers(dest="run_cmd", required=True)
 
     def slots(sp):
@@ -372,6 +402,21 @@ def build_parser() -> argparse.ArgumentParser:
     sup_opts(sv)
     slots(sv)
     sv.set_defaults(func=cmd_run_supervise)
+
+    rpt = run.add_parser("report", help="(re)build report.md from the run's state")
+    rpt.add_argument("run")
+    rpt.add_argument("--quiet", action="store_true", help="only print the path")
+    rpt.set_defaults(func=cmd_run_report)
+
+    rc = run.add_parser("control", help="stop / pause / resume a running controller, or pin a note for the planner")
+    rc.add_argument("run")
+    g = rc.add_mutually_exclusive_group()
+    g.add_argument("--stop", action="store_true", help="stop after the current iteration")
+    g.add_argument("--pause", action="store_true")
+    g.add_argument("--resume", action="store_true")
+    rc.add_argument("--note", help="hint added to every planner prompt")
+    rc.add_argument("--clear-notes", action="store_true")
+    rc.set_defaults(func=cmd_run_control)
 
     rt = run.add_parser("status", help="show a run's nodes and spend")
     rt.add_argument("run")

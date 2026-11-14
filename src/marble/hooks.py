@@ -65,11 +65,99 @@ def guard() -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- plugin hooks (interactive sessions)
+
+
+def _runs_root() -> Path:
+    if os.environ.get("MARBLE_RUNS_ROOT"):
+        return Path(os.environ["MARBLE_RUNS_ROOT"])
+    base = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return Path(base) / "runs"
+
+
+def _alive_runs(root: Path) -> list[tuple[Path, dict]]:
+    from . import report
+    out = []
+    if not root.exists():
+        return out
+    for d in sorted(root.iterdir()):
+        if (d / "tree.sqlite").exists():
+            try:
+                s = report.run_summary(d)
+            except Exception:
+                continue
+            out.append((d, s))
+    return out
+
+
+def session_start() -> int:
+    """SessionStart: tell the session which MARBLE runs exist (alive first)."""
+    try:
+        json.load(sys.stdin)
+    except json.JSONDecodeError:
+        pass
+    runs = _alive_runs(_runs_root())
+    if not runs:
+        print(json.dumps({}))
+        return 0
+    lines = []
+    for d, s in sorted(runs, key=lambda r: (not r[1]["alive"], r[0].name))[:8]:
+        best = s["best"] or {}
+        lines.append(f"- {d.name}: {s['benchmark']}, {'RUNNING' if s['alive'] else 'stopped'}, best "
+                     f"{best.get('score')} (baseline {s['baseline']}), ${s['cost_usd']:.2f}/{s['budget_usd']:.0f}"
+                     + (f", last stop: {s['last_stop']}" if not s["alive"] and s["last_stop"] else ""))
+    ctx = ("MARBLE runs in " + str(_runs_root()) + " (use the marble MCP tools or `/marble status` for details):\n"
+           + "\n".join(lines))
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}}))
+    return 0
+
+
+def guard_runs() -> int:
+    """PreToolUse (interactive): protect run state and benchmarks that have a live run."""
+    try:
+        payload = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        return 0
+    if payload.get("tool_name") not in EDIT_TOOLS:
+        return 0
+    ti = payload.get("tool_input") or {}
+    target = ti.get("file_path") or ti.get("notebook_path")
+    if not target:
+        return 0
+    p = Path(target)
+    if not p.is_absolute():
+        p = Path(payload.get("cwd") or os.getcwd()) / p
+    p = p.resolve()
+    for d, s in _alive_runs(_runs_root()):
+        d = d.resolve()
+        if p.is_relative_to(d) and p.name != "control.json":
+            print(f"MARBLE: {p} belongs to run {d.name}; run state is managed by MARBLE. Use `marble run control` "
+                  "or the marble_control MCP tool to steer a run.", file=sys.stderr)
+            return 2
+        if not s["alive"]:
+            continue
+        try:
+            import yaml
+            cfg = json.loads((d / "config.json").read_text())
+            bench = Path(cfg["benchmark"])
+            bench = bench if bench.is_dir() else bench.parent
+            raw = yaml.safe_load((bench / "benchmark.yaml").read_text())
+            repo = (bench / raw["repo"]).resolve()
+        except Exception:
+            continue
+        if p.is_relative_to(repo) or p == (bench / "benchmark.yaml").resolve():
+            print(f"MARBLE: run {d.name} is live on benchmark {bench.name}; editing its baseline or evaluator now "
+                  "would invalidate the run. Stop the run first (`marble run control --stop`).", file=sys.stderr)
+            return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ["guard"]:
-        return guard()
-    print("usage: python -m marble.hooks guard", file=sys.stderr)
+    cmds = {"guard": guard, "session-start": session_start, "guard-runs": guard_runs}
+    if argv[:1] and argv[0] in cmds:
+        return cmds[argv[0]]()
+    print(f"usage: python -m marble.hooks {{{'|'.join(cmds)}}}", file=sys.stderr)
     return 1
 
 

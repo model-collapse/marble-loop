@@ -188,7 +188,7 @@ def test_new_best_confirmed_in_full_mode(tmp_path, launcher, pairwise_copy, monk
     ctl = _controller(tmp_path, pairwise_copy, launcher, analyze=False)
     best = ctl.run()
     assert best.id == 2 and best.full_status == "ok" and best.full_score > 10
-    assert "confirmed in full" in (tmp_path / "run" / "report.md").read_text()
+    assert "confirmation eval" in (tmp_path / "run" / "report.md").read_text()
 
 
 def test_quick_only_solution_rejected_by_full_mode(tmp_path, launcher, pairwise_copy, monkeypatch):
@@ -254,3 +254,47 @@ def test_lesson_test_is_scheduled_and_updates_trust(tmp_path, launcher, toy_fit_
     assert ev and ev[0]["type"] == "lesson_test"
     tested = [e for e in ctl.state.events() if e["type"] == "lesson_tested"]
     assert tested and ctl.lessons.get(tested[0]["id"])["tests"] == 1
+
+
+def test_control_stop_and_notes(tmp_path, launcher, toy_fit_copy, monkeypatch):
+    from marble import report
+    prompts = []
+    fake = FakeAgent([(POLY_MODEL, {})] * 3)
+    orig = fake.__call__
+
+    def agent(call, log_dir):
+        prompts.append((call.role, call.prompt))
+        if call.role == "reflector":       # operator stops the run while iteration 1 finishes
+            report.write_control(tmp_path / "run", action="stop")
+        return orig(call, log_dir)
+
+    monkeypatch.setattr(search, "run_agent", agent)
+    ctl = _controller(tmp_path, toy_fit_copy, launcher, max_iterations=5, max_no_improve=10)
+    report.write_control(tmp_path / "run", note="prefer numpy-only solutions")
+    ctl.run()
+    assert len(ctl.state.nodes()) == 2                          # stopped after the current iteration
+    stops = [e for e in ctl.state.events() if e["type"] == "run_stopped"]
+    assert "operator" in stops[-1]["reason"]
+    planner = [p for r, p in prompts if r == "planner"][0]
+    assert "prefer numpy-only solutions" in planner
+    rep = (tmp_path / "run" / "report.md").read_text()
+    assert "val_mse" in rep and "prefer numpy-only" in rep
+    s = report.run_summary(tmp_path / "run")
+    assert s["best"]["node"] == 2 and s["control"]["action"] == "stop"
+
+
+def test_old_run_schema_is_migrated(tmp_path):
+    import sqlite3
+    d = tmp_path / "oldrun"
+    d.mkdir()
+    db = sqlite3.connect(str(d / "tree.sqlite"))
+    db.execute("CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent INTEGER, sha TEXT, kind TEXT, status TEXT, "
+               "eval_status TEXT, score REAL, score_std REAL, score_rel_std REAL, n_ok INTEGER, plan TEXT, summary TEXT, "
+               "error TEXT, is_best INTEGER DEFAULT 0, improved INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, "
+               "eval_seconds REAL DEFAULT 0, created REAL, finished REAL)")
+    db.execute("INSERT INTO nodes (parent, kind, status, score, is_best) VALUES (NULL, 'root', 'evaluated', 1.0, 1)")
+    db.commit()
+    db.close()
+    st = RunState(d)
+    n = st.nodes()[0]
+    assert n.score == 1.0 and n.full_score is None and n.family is None

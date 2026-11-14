@@ -28,6 +28,7 @@ import random
 
 from . import inspector as insp
 from . import policy
+from . import report
 from . import roles
 from .agents import EDIT_TOOLS, READ_TOOLS, AgentCall, AgentResult, run_agent
 from .cleanroom import protected_manifest
@@ -288,6 +289,17 @@ class Controller:
         no_improve, it = 0, sum(1 for n in self.state.nodes() if n.kind != "root")
         stop = None
         while stop is None:
+            ctl = report.read_control(self.dir)
+            if ctl.get("action") == "stop":
+                stop = "stopped by operator (control.json)"
+                break
+            if ctl.get("action") == "pause":
+                self.state.event("paused")
+                self.log("paused by operator (control.json); waiting …")
+                while report.read_control(self.dir).get("action") == "pause":
+                    time.sleep(5)
+                self.state.event("unpaused")
+                continue
             usd_it, s_it = self.pace().per_iter()
             if it >= self.cfg.max_iterations:
                 stop = f"iteration limit ({self.cfg.max_iterations})"
@@ -393,6 +405,10 @@ class Controller:
         # 2. plan
         directive = self.directive(parent, action, node)
         lq = json.dumps(findings)[:3000]
+        notes = report.read_control(self.dir).get("notes") or []
+        if notes:
+            directive += ("\n\nNotes from the human operator (pinned; take them into account):\n"
+                          + "\n".join(f"- {n}" for n in notes))
         sol_types = ("solution_pos", "solution_neg", "impl_note", "inspection")
         pr = self.agent("planner", node, cwd=wt, tools=READ_TOOLS, schema=roles.PLANNER_SCHEMA,
                         prompt=roles.planner_prompt(findings=findings, history=self.history(),
@@ -649,37 +665,7 @@ class Controller:
 
     # ------------------------------------------------------------------ report
     def write_report(self, stop: str | None) -> Path:
-        nodes = self.state.nodes()
-        root = nodes[0]
-        best = self.state.best()
-        lines = [f"# MARBLE run report: {self.spec.name}", "",
-                 f"- stop reason: {stop}", f"- cost: ${self.state.total_cost():.2f} of ${self.cfg.budget_usd:.2f}",
-                 f"- nodes: {len(nodes)} ({sum(1 for n in nodes if n.improved)} improvements)",
-                 f"- baseline: {self.spec.score.key} = {root.score:.6g}",
-                 f"- best: node #{best.id}, {self.spec.score.key} = {best.score:.6g}"
-                 + (f" (confirmed in {self.confirm_mode()}: {best.full_score:.6g})" if best.full_score is not None else ""), "",
-                 "| node | parent | kind | status | eval | score | confirm | improved | cost $ | idea |",
-                 "|---|---|---|---|---|---|---|---|---|---|"]
-        for n in nodes:
-            idea = ""
-            if n.plan:
-                p = json.loads(n.plan)
-                ch = next((h for h in p["hypotheses"] if h["id"] == p["chosen"]), {})
-                idea = f"[{ch.get('family', '')}] {ch.get('idea', '')}"[:90].replace("|", "/")
-            s = f"{n.score:.6g}" if n.score is not None else "-"
-            lines.append(f"| {n.id}{' ★' if n.is_best else ''} | {n.parent if n.parent is not None else '-'} | {n.kind} | "
-                         f"{n.status} | {n.eval_status or '-'} | {s} | {_full(n)} | {'yes' if n.improved else ''} | {n.cost_usd:.2f} | {idea} |")
+        best, root = self.state.best(), self.state.nodes()[0]
         if best.id != root.id:
             (self.dir / "best.patch").write_text(self.ws.diff(root.sha, best.sha, max_chars=10**7))
-            lines += ["", f"Best change vs baseline: `best.patch`"]
-        summ = self.lessons.summary()
-        if summ:
-            lines += ["", "## Lessons", "", ", ".join(f"{k}: {v}" for k, v in sorted(summ.items()))]
-        incs = self.incidents.all()
-        if incs:
-            lines += ["", f"## Inspector incidents ({len(incs)})", "", "| node | kind | action | detail |", "|---|---|---|---|"]
-            for i in incs:
-                lines.append(f"| {i.get('node') or '-'} | {i['kind']} | {i['action']} | {str(i['detail'])[:160].replace('|', '/')} |")
-        p = self.dir / "report.md"
-        p.write_text("\n".join(lines) + "\n")
-        return p
+        return report.write_report(self.dir, self.spec.score.key, stop)
