@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   n_ok INTEGER,
   full_score REAL,      -- confirmation eval (e.g. 'full' mode) for candidate bests
   full_status TEXT,
+  family TEXT,          -- normalised approach family of the chosen hypothesis
   plan TEXT,            -- planner summary (JSON)
   summary TEXT,         -- implementer/debugger summary
   error TEXT,
@@ -59,6 +60,7 @@ class Node:
     n_ok: int | None = None
     full_score: float | None = None
     full_status: str | None = None
+    family: str | None = None
     plan: str | None = None
     summary: str | None = None
     error: str | None = None
@@ -106,7 +108,13 @@ class RunConfig:
     stall_s: float = 180.0              # no output + no CPU + idle GPU this long = stalled
     repeat_failure_limit: int = 2       # same failure signature this many times in a row -> stop debugging
     plan_similarity_max: float = 0.8
-    max_smoke_s: float = 120.0          # agents may run the evaluator as a smoke test only if it is this fast    # re-plan once if the chosen idea is this similar to an earlier one
+    max_smoke_s: float = 120.0
+    search: str = "mcts"                # mcts | greedy
+    c_uct: float = 1.0
+    max_children: int = 2               # N_i: improve attempts per valid node
+    stagnation_n: int = 3               # n_s: re-open the root (draft) after this many candidates without a new best
+    time_penalty_w: float = -0.07       # w in R = G * (t/L)^w
+    seed: int = 0          # agents may run the evaluator as a smoke test only if it is this fast    # re-plan once if the chosen idea is this similar to an earlier one
 
     @classmethod
     def from_dict(cls, d: dict) -> "RunConfig":

@@ -117,7 +117,7 @@ def test_loop_improves_toy_fit(tmp_path, launcher, toy_fit_copy, monkeypatch):
     ctl = _controller(tmp_path, toy_fit_copy, launcher)
     best = ctl.run()
     nodes = ctl.state.nodes()
-    assert [n.kind for n in nodes] == ["root", "improve"]
+    assert [n.kind for n in nodes] == ["root", "draft"]
     assert best.id == 2 and best.improved == 1 and best.score < nodes[0].score * 0.5
     assert fake.calls == ["analyst", "planner", "implementer", "reflector"]
     assert len(ctl.state.lessons()) == 1
@@ -214,6 +214,22 @@ def test_resume_continues_from_existing_tree(tmp_path, launcher, toy_fit_copy, m
     ctl2 = Controller(tmp_path / "run", launcher, cfg, log=lambda s: None)
     ctl2.run()
     nodes = ctl2.state.nodes()
-    assert [n.kind for n in nodes] == ["root", "improve", "improve"]   # no second root, no re-init
+    assert [n.kind for n in nodes] == ["root", "draft", "improve"]   # no second root, no re-init
     assert nodes[2].parent == 2                                          # expanded the previous best
     assert sum(1 for e in ctl2.state.events() if e["type"] == "run_stopped") == 2
+
+
+def test_mcts_actions_and_draft_directive(tmp_path, launcher, toy_fit_copy, monkeypatch):
+    poly4 = POLY_MODEL.replace(", 6)", ", 4)")
+    fake = FakeAgent([(POLY_MODEL, {}), (poly4, {}), (POLY_MODEL.replace(", 6)", ", 7)"), {}), (poly4.replace(", 4)", ", 5)"), {})])
+    prompts = []
+    orig = fake.__call__
+    monkeypatch.setattr(search, "run_agent", lambda call, log_dir: (prompts.append((call.role, call.prompt)), orig(call, log_dir))[1])
+    ctl = _controller(tmp_path, toy_fit_copy, launcher, max_iterations=4, max_no_improve=10, stagnation_n=2)
+    ctl.run()
+    kinds = [n.kind for n in ctl.state.nodes()]
+    assert kinds[0] == "root" and kinds[1] == "draft" and "improve" in kinds
+    planner = [p for r, p in prompts if r == "planner"]
+    assert "DRAFT" in planner[0] and "IMPROVE" in planner[1]
+    assert all(n.family for n in ctl.state.nodes()[1:])
+    assert any(e["type"] == "draft_family" for e in ctl.state.events())

@@ -24,7 +24,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
+import random
+
 from . import inspector as insp
+from . import policy
 from . import roles
 from .agents import EDIT_TOOLS, READ_TOOLS, AgentCall, AgentResult, run_agent
 from .cleanroom import protected_manifest
@@ -303,10 +306,13 @@ class Controller:
                 break
             it += 1
             best = self.state.best()
-            self.log(f"\n[iter {it}] expanding best #{best.id} ({self.spec.score.key}={best.score:.6g}); "
-                     f"spent ${self.state.total_cost():.2f}/{self.cfg.budget_usd:.0f}, {self.elapsed_h() * 60:.0f} min")
+            parent, action = self.select()
+            self.log(f"\n[iter {it}] {action} from #{parent.id}"
+                     + (f" ({self.spec.score.key}={parent.score:.6g})" if parent.score is not None else "")
+                     + f"; best #{best.id}={best.score:.6g}; spent ${self.state.total_cost():.2f}/{self.cfg.budget_usd:.0f}, "
+                     f"{self.elapsed_h() * 60:.0f} min")
             try:
-                improved = self.iteration(best)
+                improved = self.iteration(parent, action)
             except BudgetExhausted as e:
                 stop = str(e)
                 break
@@ -317,12 +323,44 @@ class Controller:
         self.write_report(stop)
         return best
 
-    def iteration(self, parent: Node) -> bool:
-        node = self.state.new_node(parent.id, "improve")
+    # ------------------------------------------------------------------ search policy
+    def _durations(self) -> dict[int, float]:
+        d: dict[int, float] = {}
+        for e in self.state.events():
+            if e["type"] == "eval" and e.get("status") == "ok" and e.get("tag") != "confirm" and e.get("duration_mean_s"):
+                d[e["node"]] = float(e["duration_mean_s"])
+        return d
+
+    def _new_best_ids(self) -> set[int]:
+        return {e["node"] for e in self.state.events() if e["type"] == "new_best"}
+
+    def select(self) -> tuple[Node, str]:
+        if self.cfg.search == "greedy":
+            return self.state.best(), "improve"
+        pc = policy.PolicyConfig(c_uct=self.cfg.c_uct, max_children=self.cfg.max_children,
+                                 stagnation_n=self.cfg.stagnation_n, time_penalty_w=self.cfg.time_penalty_w)
+        nid, action = policy.select(self.state.nodes(), direction=self.spec.score.direction, durations=self._durations(),
+                                    timeout_s=self.spec.mode(self.cfg.eval_mode).timeout, cfg=pc,
+                                    new_best_ids=self._new_best_ids())
+        return self.state.get(nid), action
+
+    def _families(self) -> dict[int, str]:
+        return {n.id: n.family for n in self.state.nodes() if n.family}
+
+    def directive(self, parent: Node, action: str, node: Node) -> str:
+        if action != "draft":
+            return roles.improve_directive(f"node #{parent.id}")
+        stats = policy.family_stats(self.state.nodes(), self._families())
+        fam = policy.choose_family(stats, random.Random(self.cfg.seed * 7919 + node.id))
+        self.state.event("draft_family", node=node.id, family=fam, stats=stats)
+        return roles.draft_directive(fam, stats)
+
+    def iteration(self, parent: Node, action: str = "improve") -> bool:
+        node = self.state.new_node(parent.id, action)
         nd = self.node_dir(node.id)
         wt = self.ws.add_worktree(node.id, parent.sha)
         try:
-            return self._iteration(parent, node, nd, wt)
+            return self._iteration(parent, node, nd, wt, action)
         except BudgetExhausted:
             node.status, node.finished = "aborted", time.time()
             node.error = "budget exhausted"
@@ -331,13 +369,15 @@ class Controller:
         finally:
             self.ws.remove_worktree(node.id)
 
-    def _iteration(self, parent: Node, node: Node, nd: Path, wt: Path) -> bool:
+    def _iteration(self, parent: Node, node: Node, nd: Path, wt: Path, action: str = "improve") -> bool:
         # 1. analysis (cached per parent node)
         findings = self.findings_for(parent, node, wt)
         # 2. plan
+        directive = self.directive(parent, action, node)
         pr = self.agent("planner", node, cwd=wt, tools=READ_TOOLS, schema=roles.PLANNER_SCHEMA,
                         prompt=roles.planner_prompt(findings=findings, history=self.history(),
-                                                    lessons=self.lessons_text(), best_label=f"node #{parent.id}"))
+                                                    lessons=self.lessons_text(), best_label=f"node #{parent.id}",
+                                                    directive=directive))
         if not pr.ok:
             return self._abort(node, f"planner failed: {pr.error}")
         plan = pr.output
@@ -352,12 +392,14 @@ class Controller:
                     "or explain concretely what is different this time.")
             pr2 = self.agent("planner", node, cwd=wt, tools=READ_TOOLS, schema=roles.PLANNER_SCHEMA,
                              prompt=roles.planner_prompt(findings=findings, history=self.history(),
-                                                         lessons=self.lessons_text(), best_label=f"node #{parent.id}") + note)
+                                                         lessons=self.lessons_text(), best_label=f"node #{parent.id}",
+                                                         directive=directive) + note)
             if pr2.ok:
                 plan = pr2.output
         node.plan = json.dumps(plan)
         (nd / "plan.json").write_text(json.dumps(plan, indent=2))
         chosen = next((h for h in plan["hypotheses"] if h["id"] == plan["chosen"]), plan["hypotheses"][0])
+        node.family = policy.normalize_family(chosen.get("family"))
         self.log(f"    plan: [{chosen.get('family')}] {chosen.get('idea')[:150]}")
         # 3. implement
         ir = self.agent("implementer", node, cwd=wt, tools=EDIT_TOOLS, schema=roles.IMPLEMENTER_SCHEMA, editable=True,
@@ -414,41 +456,47 @@ class Controller:
                 break
             summary = self.evaluate(node, wt, mode=self.cfg.eval_mode, tag=f"try{attempt}")
         node.status = "evaluated" if node.eval_status == "ok" else "buggy"
-        # 5. compare
-        is_imp, gain, thr = improvement(self.spec, parent, node) if node.eval_status == "ok" else (False, 0.0, 0.0)
+        # 5. compare: vs parent (tree statistics) and vs the global best (new best?)
+        ok = node.eval_status == "ok"
+        beat_parent, gain, thr = improvement(self.spec, parent, node) if ok else (False, 0.0, 0.0)
+        best = self.state.best()
+        beat_best, gain_b, thr_b = improvement(self.spec, best, node) if ok else (False, 0.0, 0.0)
         confirm_note = ""
         cm = self.confirm_mode()
-        if is_imp and cm:
+        if beat_best and cm:
             # Quick mode can over- or under-state a gain (problem subset, fewer trials): re-check before
-            # accepting a new best. Compare full-vs-full when the parent has a full score, else vs its score.
+            # accepting a new best. Compare full-vs-full when the best has a full score, else vs its score.
             st = self.evaluate(node, wt, mode=cm, tag="confirm", record=False, repeats=self.cfg.confirm_repeats).stats()
             node.full_status, node.full_score = st["status"], st["score_mean"]
             if st["status"] != "ok":
-                is_imp = False
+                beat_best = beat_parent = False
                 confirm_note = f"; rejected: {cm} eval {st['status']}"
             else:
-                ref = Node(id=parent.id, parent=None, sha=None, kind="ref",
-                           score=parent.full_score if parent.full_score is not None else parent.score,
-                           score_rel_std=parent.score_rel_std)
+                ref = Node(id=best.id, parent=None, sha=None, kind="ref",
+                           score=best.full_score if best.full_score is not None else best.score,
+                           score_rel_std=best.score_rel_std)
                 cand = Node(id=node.id, parent=None, sha=None, kind="cand", score=node.full_score,
                             score_rel_std=node.score_rel_std)
                 ok_full, gain_full, thr_full = improvement(self.spec, ref, cand)
                 confirm_note = f"; {cm}: {node.full_score:.6g} ({gain_full:+.2%})"
                 if not ok_full:
-                    is_imp = False
-                    confirm_note += f" below threshold {thr_full:.2%} → rejected"
-        node.improved = int(is_imp)
+                    beat_best = False
+                    confirm_note += f" below threshold {thr_full:.2%} → not a new best"
+        node.improved = int(beat_parent)
         node.finished = time.time()
         self.state.update(node)
-        if is_imp:
+        if beat_best:
             self.state.set_best(node)
-            verdict = f"improved: {gain:+.2%} (threshold {thr:.2%}){confirm_note}"
+            verdict = f"new best: {gain_b:+.2%} vs best #{best.id} (threshold {thr_b:.2%}){confirm_note}"
         elif confirm_note:
-            verdict = f"quick-mode gain {gain:+.2%} not confirmed{confirm_note}"
-        elif node.eval_status == "ok":
-            verdict = f"no significant gain: {gain:+.2%} (threshold {thr:.2%})"
+            verdict = f"quick-mode gain {gain_b:+.2%} vs best not confirmed{confirm_note}"
+        elif ok and beat_parent:
+            verdict = f"improved on parent #{parent.id}: {gain:+.2%}, but not on best #{best.id} ({gain_b:+.2%})"
+        elif ok:
+            verdict = f"no significant gain: {gain:+.2%} vs parent (threshold {thr:.2%})"
         else:
             verdict = f"failed: {node.eval_status} after {attempt} debug attempt(s): {node.error}"
+        is_imp = beat_best
         self.log(f"    → {verdict}")
         self.state.event("verdict", node=node.id, improved=is_imp, gain=gain, threshold=thr, verdict=verdict)
         # 6. reflect

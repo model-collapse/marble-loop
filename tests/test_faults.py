@@ -107,7 +107,7 @@ def test_duplicate_code_is_not_reevaluated(tmp_path, launcher, monkeypatch):
     same = "def run():\n    return 1.0  # same value, different text\n"
     fake = Scripted([same, same])
     monkeypatch.setattr(search, "run_agent", fake)
-    ctl = _ctl(tmp_path, launcher, max_iterations=2, max_no_improve=5)
+    ctl = _ctl(tmp_path, launcher, max_iterations=2, max_no_improve=5, search="greedy")  # greedy re-expands the root
     ctl.run()
     n3 = ctl.state.get(3)
     assert n3.status == "duplicate" and "node #2" in n3.error

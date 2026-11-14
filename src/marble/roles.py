@@ -123,9 +123,10 @@ def analyst_prompt(*, node_label: str, eval_summary: dict, metrics: dict, tool_o
         """)
 
 
-def planner_prompt(*, findings: dict, history: str, lessons: str, best_label: str) -> str:
+def planner_prompt(*, findings: dict, history: str, lessons: str, best_label: str, directive: str = "") -> str:
+    head = directive or f"Plan the next experiment on the current best solution ({best_label}); its code is in the current directory."
     return textwrap.dedent(f"""\
-        Plan the next experiment on the current best solution ({best_label}); its code is in the current directory.
+        {head}
 
         ## Analyst findings
         {_json(findings, 5000)}
@@ -213,3 +214,20 @@ def reflector_prompt(*, parent: dict, child: dict, plan: dict, diff: str, outcom
         Isolate the change that caused the result. For a non-improvement, classify the cause: A (not applied /
         buggy), B (untuned), C (several changes interacting), D (within noise), E (the idea itself fails, with
         measured evidence). Default to C if you cannot tell. The key lesson must be a reusable rule of thumb.""")
+
+
+def draft_directive(family: str | None, family_stats: dict[str, tuple[int, int]]) -> str:
+    known = ", ".join(f"'{f}' ({a} improved / {b} not)" for f, (a, b) in sorted(family_stats.items())) or "none yet"
+    if family is None:
+        return ("This is a DRAFT: start a NEW approach from the baseline code in the current directory (not from the "
+                f"current best). Approach families explored so far: {known}. Choose a family that is clearly different "
+                "from these and name it in the hypothesis `family` field.")
+    a, b = family_stats.get(family, (0, 0))
+    return (f"This is a DRAFT within the approach family '{family}' ({a} improved / {b} not so far): starting from the "
+            "baseline code in the current directory, try a materially different implementation of this family. "
+            f"Keep `family` = '{family}'. Other families explored: {known}.")
+
+
+def improve_directive(node_label: str) -> str:
+    return (f"IMPROVE {node_label}: its code is in the current directory. Plan one targeted change "
+            "(ablation-style) with the best expected gain per effort.")
